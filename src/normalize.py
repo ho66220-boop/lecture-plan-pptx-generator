@@ -69,7 +69,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None):
         if row.get("날짜") and not parsed:
             reports.append(
                 report_row(
-                    "ERROR",
+                    "오류",
                     lecture,
                     "진도표 날짜",
                     "DATE_PARSE_FAILED",
@@ -84,7 +84,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None):
             lecture["flags"].append("WEEKDAY_MISMATCH")
             reports.append(
                 report_row(
-                    "WARNING",
+                    "경고",
                     lecture,
                     "진도표 날짜",
                     "WEEKDAY_MISMATCH",

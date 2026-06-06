@@ -38,7 +38,7 @@ def validate_text_limits(lecture):
         if value and len(value) > limit:
             reports.append(
                 report_row(
-                    "WARNING",
+                    "경고",
                     lecture,
                     field,
                     "TEXT_LIMIT_EXCEEDED",
@@ -56,7 +56,7 @@ def validate_text_limits(lecture):
             if value and len(value) > detail_limit:
                 reports.append(
                     report_row(
-                        "WARNING",
+                        "경고",
                         lecture,
                         "진도표_상세내용",
                         "TEXT_LIMIT_EXCEEDED",
@@ -73,7 +73,7 @@ def empty_report_row(message="처리할 강좌 시트가 없습니다."):
     return {
         column: "" for column in REPORT_COLUMNS
     } | {
-        "severity": "INFO",
+        "severity": "정보",
         "issue_code": "NO_LECTURES",
         "message": message,
         "suggestion": "강좌 시트에 값을 입력한 뒤 다시 실행해 주세요.",

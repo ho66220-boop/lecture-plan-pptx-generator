@@ -1,18 +1,18 @@
 import copy
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 try:
-    from src.date_utils import format_date_dot, parse_date
+    from src.date_utils import format_date_dot
     from src.reflow import reflow_slide
     from src.teacher_photo import apply_teacher_photo
     from src.validate import report_row
 except ModuleNotFoundError:
-    from .date_utils import format_date_dot, parse_date
+    from .date_utils import format_date_dot
     from .reflow import reflow_slide
     from .teacher_photo import apply_teacher_photo
     from .validate import report_row
@@ -53,11 +53,12 @@ def text_value(value):
 
 
 def progress_date_display(row):
-    raw = row.get("날짜", "")
-    parsed, _ = parse_date(raw)
-    if parsed:
-        return format_date_dot(parsed)
-    return text_value(raw)
+    # normalize 단계에서 base_year를 적용해 계산해 둔 parsed_date(ISO)를 그대로 사용한다.
+    # (여기서 parse_date를 다시 호출하면 base_year 기본값으로 재파싱되어 요일이 틀어질 수 있음)
+    iso = row.get("parsed_date")
+    if iso:
+        return format_date_dot(date.fromisoformat(iso))
+    return text_value(row.get("날짜", ""))
 
 
 def progress_content_display(row):
@@ -207,7 +208,7 @@ def validate_progress_overflow(lecture):
         return []
     return [
         report_row(
-            "WARNING",
+            "경고",
             lecture,
             "진도표",
             "PROGRESS_OVERFLOW",
@@ -262,7 +263,7 @@ def generate_pptx_from_template(
         for placeholder in remaining:
             reports.append(
                 report_row(
-                    "WARNING",
+                    "경고",
                     lecture,
                     "PPTX",
                     "UNRESOLVED_PLACEHOLDER",

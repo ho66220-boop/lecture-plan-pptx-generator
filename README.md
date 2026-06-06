@@ -33,7 +33,7 @@ python -m src.pipeline --input-path input/예시_홍길동_강의계획서.xlsx 
 ## 폴더 구조
 
 ```text
-lecture-plan-automation/
+lecture-plan-pptx-generator/
 ├─ src/             자동화 로직(파이프라인·reflow·사진 등)
 ├─ config/          설정(수강료표·학사일정 샘플)
 ├─ templates/       마스터 템플릿 PPTX
