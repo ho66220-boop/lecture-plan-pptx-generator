@@ -155,7 +155,12 @@ def normalize_lecture(raw, index, base_year, calendar_events=None):
             )
         )
 
-    fee = calculate_fee(lecture_id, fields.get("강의형태", ""), total_sessions)
+    fee = calculate_fee(
+        lecture_id,
+        fields.get("강의형태", ""),
+        total_sessions,
+        teacher_name=fields.get("강사명", ""),
+    )
     if total_sessions and not fee["fee_display"]:
         reports.append(
             report_row(

@@ -60,7 +60,13 @@ lecture-plan-automation/
 
 ## 수강료 설정
 
-`config/defaults.py`의 `FEE_TABLE`에서 강의형태별 회차당 수강료를 관리합니다. 특정 강좌 예외 금액은 `FEE_OVERRIDES`에 강좌ID 기준으로 추가합니다.
+`config/defaults.py`에서 관리합니다.
+
+- `FEE_TABLE` — 강의형태별 회차당 수강료 (현장강의 80,000원 / LIVE 강의 50,000원)
+- `FEE_PER_SESSION_OVERRIDES` — **강사명 기준** 회차당 예외(강의형태 표보다 우선)
+- `FEE_OVERRIDES` — 강좌ID 기준 총액 예외(필요 시)
+
+총 수강료는 `회차당 단가 × 자동 계산된 총회차`로 산출됩니다.
 
 ## 학사일정 검증
 

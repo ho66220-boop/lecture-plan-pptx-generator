@@ -4,11 +4,16 @@ SKIP_SHEET_KEYWORDS = ("작성 안내", "예시", "선택목록")
 
 FEE_TABLE = {
     "현장강의": 80000,
-    "LIVE 강의": 57000,
+    "LIVE 강의": 50000,
 }
 
 FEE_OVERRIDES = {
-    # "강좌ID": 320000,
+    # "강좌ID": 320000,  # 강좌ID 기준 총액 예외
+}
+
+# 강사명 기준 회차당 수강료 예외 (강의형태 표보다 우선 적용).
+FEE_PER_SESSION_OVERRIDES = {
+    "홍길동": 70000,
 }
 
 HOLIDAY_KEYWORDS = ("휴강", "내신기간 휴강")
