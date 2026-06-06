@@ -1,0 +1,23 @@
+# ===== 개인정보·실데이터 (절대 커밋 금지) =====
+# 강사 실제 사진: 더미(홍길동)와 README만 허용, 나머지 전부 제외
+teacher_photos/*
+!teacher_photos/README.txt
+!teacher_photos/홍길동.jpg
+
+# 입력 엑셀: 의도한 양식/샘플만 허용, 실제 강사 파일은 제외
+input/*.xlsx
+!input/통합_강의계획서_입력양식.xlsx
+!input/예시_홍길동_강의계획서.xlsx
+
+# 생성 결과물(실데이터·사진 임베드)
+output/
+
+# FAQ 포함 원본 백업(브랜딩 문구 포함)
+templates/*FAQ포함*backup*.pptx
+
+# ===== 작업 캐시/내부 =====
+__pycache__/
+*.pyc
+.pytest_cache/
+memory/
+.DS_Store
