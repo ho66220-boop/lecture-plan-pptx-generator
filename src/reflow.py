@@ -78,6 +78,20 @@ def _needed_bottom_emu(shape):
     return shape.top + int(round(needed_h_emu))
 
 
+def _is_photo_box(shape):
+    """우상단 정사각형 사진 박스인지(텍스트 없음). reflow가 이 박스 높이는 키우지 않도록 보호."""
+    if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+        return False
+    top_cm = shape.top / EMU_PER_CM
+    left_cm = shape.left / EMU_PER_CM
+    return (
+        top_cm < 2.0
+        and left_cm > 13.5
+        and shape.width > 3.0 * EMU_PER_CM
+        and abs(shape.width - shape.height) < 0.7 * EMU_PER_CM
+    )
+
+
 def _cluster_bands(shapes):
     """세로로 겹치는 도형끼리 행으로 묶는다. 반환: [(top, bottom, [shapes])] (top 오름차순)."""
     items = sorted(shapes, key=lambda s: s.top)
@@ -140,8 +154,9 @@ def reflow_slide(slide, content_ids=None):
                 sh.top = int(round(otop + offset + delta))
             else:
                 sh.top = int(round(otop + offset))
-            # 행을 세로로 채우는 도형(배경 셀·테두리·글자 박스)만 확장. 얇은 장식선은 제외.
-            if delta and not is_thin and obottom >= bottom - REACH_TOL:
+            # 행을 세로로 채우는 도형(배경 셀·테두리·글자 박스)만 확장.
+            # 얇은 장식선과 우상단 사진 박스(정사각 유지 필요)는 제외.
+            if delta and not is_thin and obottom >= bottom - REACH_TOL and not _is_photo_box(sh):
                 sh.height = int(round(oh + delta))
         offset += delta
 
