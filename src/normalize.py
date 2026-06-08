@@ -135,6 +135,19 @@ def normalize_lecture(raw, index, base_year, calendar_events=None):
     last_date = max(real_class_dates) if real_class_dates else None
     total_sessions = len(real_class_dates)
 
+    # 한 달 회차수 = 달력상 월별 회차 중 가장 많은 달(부분 월의 영향을 피하기 위해 최대값 사용).
+    month_counts = {}
+    for class_date in real_class_dates:
+        key = (class_date.year, class_date.month)
+        month_counts[key] = month_counts.get(key, 0) + 1
+    monthly_sessions = max(month_counts.values()) if month_counts else 0
+
+    # 청구 단위: 특강/썸머는 강좌 전체 합계, 그 외(정규반)는 월 단위.
+    gubun = fields.get("구분", "")
+    season = fields.get("시즌", "")
+    is_special = ("특강" in gubun) or ("썸머" in season) or ("특강" in season)
+    billing = "total" if is_special else "monthly"
+
     class_time = fields.get("수업 요일 / 시간", "")
     time_display = extract_start_time_display(class_time)
     opening_display = format_date_dot(first_date)
@@ -160,6 +173,8 @@ def normalize_lecture(raw, index, base_year, calendar_events=None):
         fields.get("강의형태", ""),
         total_sessions,
         teacher_name=fields.get("강사명", ""),
+        monthly_sessions=monthly_sessions,
+        billing=billing,
     )
     if total_sessions and not fee["fee_display"]:
         reports.append(

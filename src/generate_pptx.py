@@ -9,11 +9,13 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 try:
     from src.date_utils import format_date_dot
     from src.reflow import reflow_slide
+    from src.subject_band import add_subject_band
     from src.teacher_photo import apply_teacher_photo
     from src.validate import report_row
 except ModuleNotFoundError:
     from .date_utils import format_date_dot
     from .reflow import reflow_slide
+    from .subject_band import add_subject_band
     from .teacher_photo import apply_teacher_photo
     from .validate import report_row
 
@@ -238,6 +240,7 @@ def generate_pptx_from_template(
     }
     reports = []
     generated_slides = []
+    slide_subjects = []
     max_growth = 0
 
     for lecture in lectures:
@@ -273,11 +276,15 @@ def generate_pptx_from_template(
                 )
             )
         generated_slides.append(slide)
+        slide_subjects.append(lecture.get("fields", {}).get("과목", ""))
 
     remove_slide(prs, template_slide)
     # 모든 슬라이드가 공유하는 슬라이드 높이를, 가장 많이 늘어난 슬라이드에 맞춰 확장.
     if max_growth:
         prs.slide_height = int(prs.slide_height + max_growth)
+    # 최종 슬라이드 크기가 정해진 뒤 과목 색 테두리를 두른다(테두리가 전체 면적을 감싸야 하므로).
+    for slide, subject in zip(generated_slides, slide_subjects):
+        add_subject_band(slide, subject, prs.slide_width, prs.slide_height)
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     prs.save(output_path)
     return Path(output_path), reports
