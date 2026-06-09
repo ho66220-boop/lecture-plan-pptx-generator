@@ -532,7 +532,8 @@ def generate_pptx_from_template(
                 )
             )
         generated_slides.append(slide)
-        slide_subjects.append(lecture.get("fields", {}).get("과목", ""))
+        # 배지와 동일하게 정규화한 과목으로 색 테두리 매칭(미적분·확통·기하 등 세부과목 → '수학').
+        slide_subjects.append(normalize_subject(lecture.get("fields", {}).get("과목", "")))
 
     remove_slide(prs, template_slide)
     # 슬라이드 높이는 A4(템플릿 그대로) 유지 — fit_slide_to_height가 내용을 A4 안에 맞춰 둠.
