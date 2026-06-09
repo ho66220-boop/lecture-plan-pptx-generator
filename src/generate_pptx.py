@@ -596,12 +596,15 @@ def generate_pptx_from_template(
     return Path(output_path), reports
 
 
-def generate_pptx(lectures, output_dir, template_path=None, teacher_photo_dir=None):
+def generate_pptx(lectures, output_dir, template_path=None, teacher_photo_dir=None,
+                  target_month=None, base_year=None):
     output = Path(output_dir) / "generated_pptx"
     output.mkdir(parents=True, exist_ok=True)
     template = Path(template_path or DEFAULT_TEMPLATE_PATH)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    output_path = output / f"강의계획서_초안_{timestamp}.pptx"
+    # 월별 계획서는 파일명에 대상 연·월을 넣어 7월/8월이 서로 덮어쓰지 않게 한다.
+    month_tag = f"{base_year}_{target_month:02d}_" if target_month else ""
+    output_path = output / f"강의계획서_초안_{month_tag}{timestamp}.pptx"
     return generate_pptx_from_template(
         lectures=lectures,
         template_path=template,

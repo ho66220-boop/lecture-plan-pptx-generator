@@ -24,6 +24,7 @@ def run_pipeline(
     template_path=None,
     teacher_photo_dir=None,
     make_pptx=True,
+    target_month=None,
 ):
     input_path = Path(input_path)
     output_dir = Path(output_dir)
@@ -38,7 +39,10 @@ def run_pipeline(
         teacher_photo_dir = str(default_photo_dir) if default_photo_dir.is_dir() else None
 
     raw_lectures = collect_lectures(input_path)
-    lectures, reports = normalize_lectures(raw_lectures, base_year, academic_calendar_path)
+    # target_month(예: 7)이 주어지면 정규반 월별 계획서 모드(그 달만 잘라 재계산).
+    lectures, reports = normalize_lectures(
+        raw_lectures, base_year, academic_calendar_path, target_month
+    )
     if not lectures:
         reports.append(empty_report_row())
 
@@ -50,6 +54,8 @@ def run_pipeline(
             output_dir,
             template_path=template_path,
             teacher_photo_dir=teacher_photo_dir,
+            target_month=target_month,
+            base_year=base_year,
         )
         reports.extend(pptx_reports)
     validation_report = export_validation_report(reports, output_dir)
@@ -75,6 +81,10 @@ if __name__ == "__main__":
     parser.add_argument("--template-path", default=None)
     parser.add_argument("--teacher-photo-dir", default=None)
     parser.add_argument("--no-pptx", action="store_true")
+    parser.add_argument(
+        "--target-month", type=int, default=None,
+        help="정규반 월별 계획서: 대상 월(예: 7). 지정 시 정규반만, 그 달 진도로 회차·기간·수강료 재계산.",
+    )
     args = parser.parse_args()
     result = run_pipeline(
         input_path=args.input_path,
@@ -84,5 +94,6 @@ if __name__ == "__main__":
         template_path=args.template_path,
         teacher_photo_dir=args.teacher_photo_dir,
         make_pptx=not args.no_pptx,
+        target_month=args.target_month,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
