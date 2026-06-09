@@ -276,6 +276,23 @@ def progress_content_display(row):
     return "\n".join(lines)
 
 
+# 진도표 우측 컬럼(헤더 + 데이터 셀) 도형 id. 5주 이하라 우측이 전부 비면 이 도형들을 지운다.
+RIGHT_PROGRESS_IDS = frozenset({
+    72, 73, 74, 75,                              # 우측 헤더(주차 / 단원 및 수업내용)
+    80, 81, 82, 83, 88, 89, 90, 91, 96, 97, 98, 99,
+    104, 105, 106, 107, 112, 113, 114, 115,      # 우측 데이터 셀(배경 + 글상자) 5행
+})
+PROGRESS_SINGLE_COL_MAX = 5                       # 진도 수가 이 이하면 좌측 한 컬럼에 다 들어감
+
+
+def hide_empty_right_progress(slide):
+    """진도 우측 컬럼을 삭제(헤더만 남아 '미완성'으로 보이는 문제 방지).
+    좌측 5행에 다 들어가 우측이 전부 빈 경우에만 호출할 것."""
+    for shape in list(slide.shapes):
+        if shape.shape_id in RIGHT_PROGRESS_IDS:
+            shape._element.getparent().remove(shape._element)
+
+
 def build_placeholder_map(lecture):
     fields = lecture.get("fields", {})
     # 큰 글씨 = 강좌명, 작은 글씨 = 제목 우선(단 제목이 비었거나 강좌명과 같으면 서브 슬로건).
@@ -470,6 +487,8 @@ def generate_pptx_from_template(
         reports.extend(validate_progress_overflow(lecture))
         slide = clone_template_slide(prs, template_slide)
         replace_placeholders_in_slide(slide, build_placeholder_map(lecture))
+        if len(lecture.get("progress", [])) <= PROGRESS_SINGLE_COL_MAX:
+            hide_empty_right_progress(slide)   # 5주 이하: 빈 우측 컬럼 제거
         fit_oneline_badges(slide)
         fit_title(slide)
         fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
