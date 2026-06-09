@@ -85,28 +85,40 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
     if target_month is not None and not is_regular:
         return None, []
 
+    # 다음 달(미리보기용). 12월이면 다음 해 1월.
+    next_year, next_month = None, None
+    if target_month is not None:
+        next_month = 1 if target_month == 12 else target_month + 1
+        next_year = base_year + 1 if target_month == 12 else base_year
+
     for row_idx, row in enumerate(raw.get("progress", []), start=1):
         parsed, claimed_weekday = parse_date(row.get("날짜"), base_year=base_year)
-        # 월별 모드: 대상 월 행만 처리. 날짜를 못 읽는 행은 달을 알 수 없어 제외하되 리포트에 남긴다.
-        if target_month is not None and not _in_target_month(parsed, base_year, target_month):
-            if row.get("날짜") and not parsed:
-                reports.append(
-                    report_row(
-                        "오류",
-                        lecture,
-                        "진도표 날짜",
-                        "DATE_PARSE_FAILED",
-                        f"진도표 {row_idx}행 날짜를 해석하지 못해 {target_month}월 계획서에서 제외했습니다.",
-                        raw_value=row.get("날짜", ""),
-                        suggestion="예: 7/20(월), 2026-07-20 형식으로 입력해 주세요.",
+        # 월별 모드: 이번 달 + 다음 달 행만 처리. 둘 다 아니면 제외.
+        # 날짜를 못 읽는 행은 달을 알 수 없어 제외하되 리포트에 남긴다(조용히 버리지 않음).
+        is_next = False
+        if target_month is not None:
+            in_this = _in_target_month(parsed, base_year, target_month)
+            is_next = _in_target_month(parsed, next_year, next_month)
+            if not (in_this or is_next):
+                if row.get("날짜") and not parsed:
+                    reports.append(
+                        report_row(
+                            "오류",
+                            lecture,
+                            "진도표 날짜",
+                            "DATE_PARSE_FAILED",
+                            f"진도표 {row_idx}행 날짜를 해석하지 못해 {target_month}월 계획서에서 제외했습니다.",
+                            raw_value=row.get("날짜", ""),
+                            suggestion="예: 7/20(월), 2026-07-20 형식으로 입력해 주세요.",
+                        )
                     )
-                )
-            continue
+                continue
         row = dict(row)
         row["parsed_date"] = parsed.isoformat() if parsed else ""
         row["computed_weekday"] = weekday_kr(parsed) if parsed else ""
         row["weekday_mismatch_flag"] = False
         row["is_real_class"] = False
+        row["is_next_month"] = is_next   # 다음 달 미리보기 행(표시용 — 회차/수강료 누적 제외)
 
         if row.get("날짜") and not parsed:
             reports.append(
@@ -137,7 +149,8 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                 )
             )
 
-        if parsed and not is_holiday_row(row):
+        # 다음 달 행은 표시용 — 회차/수강료/기간 누적에는 절대 넣지 않는다(월 단가 메시지 유지).
+        if parsed and not is_holiday_row(row) and not is_next:
             row["is_real_class"] = True
             real_class_dates.append(parsed)
 

@@ -264,6 +264,7 @@ def progress_date_display(row):
 
 
 HOLIDAY_RED = RGBColor(0xC0, 0x00, 0x00)   # 진도계획 휴강 표시 색
+NEXT_MONTH_GRAY = RGBColor(0x99, 0x99, 0x99)   # 월별 계획서의 다음 달 미리보기 행 색(회색)
 
 
 def progress_content_display(row):
@@ -342,6 +343,24 @@ def balance_progress_columns(slide, left_count, right_count):
         sh._element.getparent().remove(sh._element)
 
 
+def _progress_slots(progress_rows):
+    """진도 행을 좌우 균형 분배한 슬롯 목록 (placeholder_side, slot_idx, progress_index)."""
+    left_count, right_count = progress_split(len(progress_rows))
+    slots = [("좌", i, i - 1) for i in range(1, left_count + 1)]
+    slots += [("우", i, left_count + i - 1) for i in range(1, right_count + 1)]
+    return slots
+
+
+def next_month_progress_keys(progress_rows):
+    """다음 달 미리보기 행이 들어간 슬롯의 placeholder 키 집합(회색 처리 대상)."""
+    keys = set()
+    for side, idx, pidx in _progress_slots(progress_rows):
+        if progress_rows[pidx].get("is_next_month"):
+            keys.add(f"진도_{side}_{idx}_날짜")
+            keys.add(f"진도_{side}_{idx}_내용")
+    return keys
+
+
 def build_placeholder_map(lecture):
     fields = lecture.get("fields", {})
     # 큰 글씨 = 강좌명, 작은 글씨 = 제목 우선(단 제목이 비었거나 강좌명과 같으면 서브 슬로건).
@@ -375,18 +394,20 @@ def build_placeholder_map(lecture):
     }
 
     # 진도 좌우 균형 분배: 좌측=ceil(n/2), 우측=나머지. 좌측 위→아래가 앞 회차, 그다음 우측.
+    # 월별 모드면 이번 달 + 다음 달 행이 함께 들어 있고, 다음 달 첫 행에 '예정' 표식을 단다.
     progress_rows = lecture.get("progress", [])
-    left_count, right_count = progress_split(len(progress_rows))
-    for idx in range(1, 6):
-        row = progress_rows[idx - 1] if idx <= left_count else {}
-        placeholder_map[f"진도_좌_{idx}_날짜"] = progress_date_display(row) if row else ""
-        placeholder_map[f"진도_좌_{idx}_내용"] = progress_content_display(row) if row else ""
-
-    for idx in range(1, 6):
-        source_index = left_count + idx - 1
-        row = progress_rows[source_index] if idx <= right_count else {}
-        placeholder_map[f"진도_우_{idx}_날짜"] = progress_date_display(row) if row else ""
-        placeholder_map[f"진도_우_{idx}_내용"] = progress_content_display(row) if row else ""
+    for side in ("좌", "우"):
+        for idx in range(1, 6):
+            placeholder_map[f"진도_{side}_{idx}_날짜"] = ""
+            placeholder_map[f"진도_{side}_{idx}_내용"] = ""
+    first_next = next((i for i, r in enumerate(progress_rows) if r.get("is_next_month")), None)
+    for side, idx, pidx in _progress_slots(progress_rows):
+        row = progress_rows[pidx]
+        date_disp = progress_date_display(row)
+        if pidx == first_next and date_disp:
+            date_disp = f"예정\n{date_disp}"   # 다음 달 시작 표식(좁은 날짜칸이라 별도 줄)
+        placeholder_map[f"진도_{side}_{idx}_날짜"] = date_disp
+        placeholder_map[f"진도_{side}_{idx}_내용"] = progress_content_display(row)
 
     return {key: text_value(value) for key, value in placeholder_map.items()}
 
@@ -399,24 +420,27 @@ def replace_placeholders_in_text(text, placeholder_map):
     return PLACEHOLDER_RE.sub(replace, text)
 
 
-def replace_placeholders_in_paragraph(paragraph, placeholder_map):
+def replace_placeholders_in_paragraph(paragraph, placeholder_map, gray_keys=()):
     if not paragraph.runs:
         return
     original = "".join(run.text for run in paragraph.runs)
     if "{{" not in original:
         return
+    keys = [match.group(1).strip() for match in PLACEHOLDER_RE.finditer(original)]
     replaced = replace_placeholders_in_text(original, placeholder_map)
     paragraph.runs[0].text = replaced
     for run in paragraph.runs[1:]:
         run.text = ""
-    # 진도계획 휴강은 빨간색으로(휴강일 필드는 강의개요에서 빠져 여기 외엔 '휴강'으로 시작하는 셀 없음).
+    # 휴강 빨강이 회색보다 우선. 그 외 다음 달 미리보기 행은 회색.
     if replaced.strip().startswith("휴강"):
         paragraph.runs[0].font.color.rgb = HOLIDAY_RED
+    elif gray_keys and any(key in gray_keys for key in keys):
+        paragraph.runs[0].font.color.rgb = NEXT_MONTH_GRAY
 
 
-def replace_placeholders_in_text_frame(text_frame, placeholder_map):
+def replace_placeholders_in_text_frame(text_frame, placeholder_map, gray_keys=()):
     for paragraph in text_frame.paragraphs:
-        replace_placeholders_in_paragraph(paragraph, placeholder_map)
+        replace_placeholders_in_paragraph(paragraph, placeholder_map, gray_keys)
 
 
 def iter_shapes(shapes):
@@ -426,18 +450,18 @@ def iter_shapes(shapes):
             yield from iter_shapes(shape.shapes)
 
 
-def replace_placeholders_in_shape(shape, placeholder_map):
+def replace_placeholders_in_shape(shape, placeholder_map, gray_keys=()):
     if getattr(shape, "has_text_frame", False):
-        replace_placeholders_in_text_frame(shape.text_frame, placeholder_map)
+        replace_placeholders_in_text_frame(shape.text_frame, placeholder_map, gray_keys)
     if getattr(shape, "has_table", False):
         for row in shape.table.rows:
             for cell in row.cells:
-                replace_placeholders_in_text_frame(cell.text_frame, placeholder_map)
+                replace_placeholders_in_text_frame(cell.text_frame, placeholder_map, gray_keys)
 
 
-def replace_placeholders_in_slide(slide, placeholder_map):
+def replace_placeholders_in_slide(slide, placeholder_map, gray_keys=()):
     for shape in iter_shapes(slide.shapes):
-        replace_placeholders_in_shape(shape, placeholder_map)
+        replace_placeholders_in_shape(shape, placeholder_map, gray_keys)
 
 
 def collect_texts_from_slide(slide):
@@ -537,8 +561,10 @@ def generate_pptx_from_template(
         reports.extend(validate_required_values(lecture))
         reports.extend(validate_progress_overflow(lecture))
         slide = clone_template_slide(prs, template_slide)
-        replace_placeholders_in_slide(slide, build_placeholder_map(lecture))
-        left_count, right_count = progress_split(len(lecture.get("progress", [])))
+        progress_rows = lecture.get("progress", [])
+        gray_keys = next_month_progress_keys(progress_rows)   # 다음 달 미리보기 → 회색
+        replace_placeholders_in_slide(slide, build_placeholder_map(lecture), gray_keys)
+        left_count, right_count = progress_split(len(progress_rows))
         balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
         fit_oneline_badges(slide)
         fit_title(slide)
