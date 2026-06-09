@@ -394,19 +394,15 @@ def build_placeholder_map(lecture):
     }
 
     # 진도 좌우 균형 분배: 좌측=ceil(n/2), 우측=나머지. 좌측 위→아래가 앞 회차, 그다음 우측.
-    # 월별 모드면 이번 달 + 다음 달 행이 함께 들어 있고, 다음 달 첫 행에 '예정' 표식을 단다.
+    # 월별 모드면 이번 달 + 다음 달 행이 함께 들어 있다(다음 달은 회색 표시).
     progress_rows = lecture.get("progress", [])
     for side in ("좌", "우"):
         for idx in range(1, 6):
             placeholder_map[f"진도_{side}_{idx}_날짜"] = ""
             placeholder_map[f"진도_{side}_{idx}_내용"] = ""
-    first_next = next((i for i, r in enumerate(progress_rows) if r.get("is_next_month")), None)
     for side, idx, pidx in _progress_slots(progress_rows):
         row = progress_rows[pidx]
-        date_disp = progress_date_display(row)
-        if pidx == first_next and date_disp:
-            date_disp = f"예정\n{date_disp}"   # 다음 달 시작 표식(좁은 날짜칸이라 별도 줄)
-        placeholder_map[f"진도_{side}_{idx}_날짜"] = date_disp
+        placeholder_map[f"진도_{side}_{idx}_날짜"] = progress_date_display(row)
         placeholder_map[f"진도_{side}_{idx}_내용"] = progress_content_display(row)
 
     return {key: text_value(value) for key, value in placeholder_map.items()}
