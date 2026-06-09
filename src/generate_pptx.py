@@ -34,6 +34,8 @@ FIT_SCALES = [1.0, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55, 0.50]
 PROSE_MIN_WIDTH = int(15.0 * EMU_PER_CM)    # 이보다 넓은 글상자 = 강의특징/관리 같은 본문 → 먼저 축소
 PROSE_MIN_CHARS = 40                        # 본문으로 볼 최소 글자 수(1단어 헤더는 제외)
 REST_FLOOR = 0.82                           # 정보 그리드·진도표는 이 비율 아래로는 줄이지 않음(가독성 유지)
+PROSE_MIN_PT = 11.0                         # 강의특징/관리 본문 폰트 절대 하한(pt). base가 더 작으면 base에서 멈춤.
+                                            # 하한으로도 한 장에 안 들어가면 자르지 않고 A4_OVERFLOW로 플래그만.
 
 # ── 좌상단 배지(강좌유형/구분/학년)·과목/강사 한 줄 박스: 가로로 넘치면 폰트만 축소 ──
 BADGE_FIT_TOP = FIT_TITLE_GUARD             # 이 위(상단)의 좁은 한 줄 박스만 가로 맞춤 대상
@@ -195,19 +197,26 @@ def fit_slide_to_height(slide, content_ids, target_bottom, guard=FIT_TITLE_GUARD
     for scale in FIT_SCALES:
         _restore_layout(slide, snapshot)
         if scale < 1.0:
-            # 본문(강의특징/관리)은 scale 그대로 줄이고, 정보 그리드·진도표는 REST_FLOOR 위에서만 줄여 가독성 유지.
+            # 본문(강의특징/관리)은 절대 하한 PROSE_MIN_PT까지만, 정보·진도표는 REST_FLOOR 비율까지만 줄여 가독성 유지.
             rest_scale = max(scale, REST_FLOOR)
             for shape in slide.shapes:
                 if shape.top is None or shape.top < guard:
                     continue
                 if not getattr(shape, "has_text_frame", False):
                     continue
-                s = scale if _is_prose_shape(shape) else rest_scale
+                prose = _is_prose_shape(shape)
                 for pi, para in enumerate(shape.text_frame.paragraphs):
                     for ri, run in enumerate(para.runs):
                         key = (shape.shape_id, pi, ri)
-                        if key in fonts:
-                            run.font.size = Pt(round(fonts[key] * s, 1))
+                        if key not in fonts:
+                            continue
+                        base_pt = fonts[key]
+                        if prose:
+                            floor_pt = min(base_pt, PROSE_MIN_PT)   # base가 floor보다 작으면 base에서 멈춤
+                            new_pt = max(floor_pt, base_pt * scale)
+                        else:
+                            new_pt = base_pt * rest_scale
+                        run.font.size = Pt(round(new_pt, 1))
         reflow_slide(slide, content_ids)
         last_scale = scale
         if _max_bottom(slide) <= target_bottom:
@@ -471,9 +480,10 @@ def generate_pptx_from_template(
                     lecture,
                     "PPTX",
                     "A4_OVERFLOW",
-                    f"본문이 많아 최소 폰트({int(FIT_SCALES[-1] * 100)}%)로도 A4 한 장을 넘깁니다. 본문 축약을 권장합니다.",
-                    raw_value=f"scale={fit_scale}",
-                    suggestion="강의특징/관리 프로그램 문구를 줄이면 가독성이 좋아집니다.",
+                    "강의특징/관리 본문 폰트를 가독성 하한까지 줄여도 A4 한 장에 안 들어갑니다. "
+                    "코드가 더 줄이지 않으니(가독성 우선), 강사 분량을 줄여야 합니다.",
+                    raw_value=f"scale={fit_scale}, prose_floor_cfg={PROSE_MIN_PT:.0f}pt",
+                    suggestion="강의특징/관리 프로그램 문구를 줄여 주세요(이번 한 장 분량 초과).",
                 )
             )
         teacher_name = lecture.get("fields", {}).get("강사명", "")
