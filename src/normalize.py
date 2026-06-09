@@ -142,10 +142,14 @@ def normalize_lecture(raw, index, base_year, calendar_events=None):
         month_counts[key] = month_counts.get(key, 0) + 1
     monthly_sessions = max(month_counts.values()) if month_counts else 0
 
-    # 청구 단위: 특강/썸머는 강좌 전체 합계, 그 외(정규반)는 월 단위.
+    # 청구 단위: 특강/썸머는 강좌 전체 합계(total), 정규반은 월 단위(monthly).
+    # 정규와 특강이 동시에 붙으면(구분 혼합·여름 정규반) 정규 우선 → monthly(과다청구 방지).
     gubun = fields.get("구분", "")
     season = fields.get("시즌", "")
-    is_special = ("특강" in gubun) or ("썸머" in season) or ("특강" in season)
+    is_regular = "정규" in gubun
+    is_special = (not is_regular) and (
+        ("특강" in gubun) or ("썸머" in season) or ("특강" in season)
+    )
     billing = "total" if is_special else "monthly"
 
     class_time = fields.get("수업 요일 / 시간", "")
