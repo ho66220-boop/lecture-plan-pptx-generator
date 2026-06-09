@@ -4,7 +4,9 @@ from datetime import date, datetime
 from pathlib import Path
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from pptx.util import Pt
 
 try:
     from src.date_utils import format_date_dot
@@ -22,6 +24,195 @@ except ModuleNotFoundError:
 
 PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 DEFAULT_TEMPLATE_PATH = Path("templates") / "강의계획서_마스터템플릿.pptx"
+
+# ── A4 맞춤(슬라이드는 프레젠테이션당 한 크기 → A4 고정, 넘치면 본문 폰트 축소) ──
+EMU_PER_CM = 360000
+EMU_PER_PT = 12700
+A4_BOTTOM_MARGIN = int(0.30 * EMU_PER_CM)   # A4 하단 여유
+FIT_TITLE_GUARD = int(5.0 * EMU_PER_CM)     # 이 위(제목·과목 영역)는 축소 대상에서 제외
+FIT_SCALES = [1.0, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55, 0.50]
+PROSE_MIN_WIDTH = int(15.0 * EMU_PER_CM)    # 이보다 넓은 글상자 = 강의특징/관리 같은 본문 → 먼저 축소
+PROSE_MIN_CHARS = 40                        # 본문으로 볼 최소 글자 수(1단어 헤더는 제외)
+REST_FLOOR = 0.82                           # 정보 그리드·진도표는 이 비율 아래로는 줄이지 않음(가독성 유지)
+
+# ── 좌상단 배지(강좌유형/구분/학년)·과목/강사 한 줄 박스: 가로로 넘치면 폰트만 축소 ──
+BADGE_FIT_TOP = FIT_TITLE_GUARD             # 이 위(상단)의 좁은 한 줄 박스만 가로 맞춤 대상
+BADGE_MAX_WIDTH = int(4.5 * EMU_PER_CM)     # 이보다 넓은 박스(슬로건/제목)는 제외
+BADGE_FONT_FLOOR = 7.0                      # 이 pt 아래로는 줄이지 않음
+DEFAULT_INSET = 91440                       # 좌/우 기본 안쪽 여백(EMU)
+# 큰 제목(강좌명): 박스(높이 2.5cm)가 2줄을 수용하므로, 2줄 안에 들면 폰트 유지하고
+# 그보다 길 때만 축소(긴 강좌명도 큰 글씨로 최대 2줄까지).
+TITLE_MIN_WIDTH = int(10.0 * EMU_PER_CM)    # 이보다 넓은 박스만 제목으로 간주(슬로건/제목)
+TITLE_BIG_PT = 16.0                         # 이 pt 이상이어야 '큰 제목'(작은 슬로건 글상자는 제외)
+TITLE_FONT_FLOOR = 14.0                     # 큰 제목 최소 pt
+TITLE_MAX_LINES = 2                         # 제목 허용 최대 줄 수
+
+# 수학 세부 과목 → '수학' 으로 통일할 때 쓰는 키워드(공백 제거 후 비교).
+MATH_SUBJECT_KEYS = (
+    "수학", "수1", "수2", "수상", "수하", "미적", "확통", "확률",
+    "통계", "기하", "대수", "공통수학",
+)
+# 끝에 붙은 수준 표기 제거: 아라비아(1·2·3)·전각(１２３)·로마자(Ⅰ Ⅱ Ⅲ).
+# 예) 물리학Ⅰ→물리학, 화학Ⅰ→화학, 통합과학2→통합과학, 생명과학Ⅰ→생명과학.
+LEVEL_SUFFIX_RE = re.compile(r"\s*[123１２３ⅠⅡⅢ]\s*$")
+
+
+def normalize_subject(subject):
+    """과목 표기 정규화:
+    - 수학 계열 세부 과목(미적분·확통·기하 등)은 모두 '수학' 으로.
+    - 과탐 등 끝에 붙은 수준 표기(물리학Ⅰ·화학Ⅰ·통합과학2 …) 제거.
+    """
+    s = (subject or "").strip()
+    if not s:
+        return s
+    key = s.replace(" ", "")
+    if any(word in key for word in MATH_SUBJECT_KEYS):
+        return "수학"
+    return LEVEL_SUFFIX_RE.sub("", s)
+
+
+def _text_visual_pt(text, font_pt):
+    """한 줄 텍스트의 대략적 가로폭(pt). 한글=폰트pt, ASCII=절반 가량."""
+    return sum((font_pt * 0.55) if ord(ch) < 128 else float(font_pt) for ch in text)
+
+
+def fit_oneline_badges(slide):
+    """상단의 좁은 한 줄 박스(배지·과목·강사명)에서 글자가 박스 폭을 넘치면
+    폰트만 줄여 한 줄에 들어가게 한다(세로 확장/줄바꿈 방지). 리플로우 전에 호출."""
+    for shape in slide.shapes:
+        if shape.top is None or shape.top >= BADGE_FIT_TOP:
+            continue
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        if shape.width is None or shape.width > BADGE_MAX_WIDTH:
+            continue
+        tf = shape.text_frame
+        text = tf.text.strip()
+        if not text:
+            continue
+        tf.word_wrap = False
+        runs = [run for para in tf.paragraphs for run in para.runs]
+        if not runs:
+            continue
+        base = next((r.font.size.pt for r in runs if r.font.size is not None), 9.0)
+        ml = tf.margin_left if tf.margin_left is not None else DEFAULT_INSET
+        mr = tf.margin_right if tf.margin_right is not None else DEFAULT_INSET
+        inner_pt = (shape.width - ml - mr) / EMU_PER_PT
+        widest = max((_text_visual_pt(line, base) for line in text.split("\n")), default=0)
+        if inner_pt <= 0 or widest <= inner_pt:
+            continue
+        new_pt = max(BADGE_FONT_FLOOR, round(base * inner_pt / widest, 1))
+        for run in runs:
+            if run.font.size is not None:
+                run.font.size = Pt(new_pt)
+
+
+def fit_title(slide):
+    """큰 제목(강좌명) 글상자: 박스 높이(2.5cm)가 최대 2줄을 담으므로, 2줄 안에 들어가면
+    폰트를 그대로 두고(큰 글씨 유지), 2줄로도 부족할 만큼 길면 그때만 폰트를 줄인다."""
+    for shape in slide.shapes:
+        if shape.top is None or shape.top >= BADGE_FIT_TOP:
+            continue
+        if not getattr(shape, "has_text_frame", False):
+            continue
+        if shape.width is None or shape.width < TITLE_MIN_WIDTH:
+            continue
+        tf = shape.text_frame
+        paragraphs = [para.text for para in tf.paragraphs if para.text.strip()]
+        if not paragraphs:
+            continue
+        runs = [run for para in tf.paragraphs for run in para.runs]
+        base = next((r.font.size.pt for r in runs if r.font.size is not None), 0.0)
+        if base < TITLE_BIG_PT:        # 작은 슬로건 글상자는 제외
+            continue
+        tf.word_wrap = True            # 2줄 줄바꿈 허용
+        ml = tf.margin_left if tf.margin_left is not None else DEFAULT_INSET
+        mr = tf.margin_right if tf.margin_right is not None else DEFAULT_INSET
+        inner_pt = (shape.width - ml - mr) / EMU_PER_PT
+        widest = max((_text_visual_pt(p, base) for p in paragraphs), default=0)
+        if inner_pt <= 0 or widest <= 0:
+            continue
+        # 최대 줄 수 안에 들어가는 최대 폰트. 이미 들어가면(>=base) 손대지 않음.
+        max_font = base * (TITLE_MAX_LINES * inner_pt) / widest
+        if max_font >= base:
+            continue
+        new_pt = max(TITLE_FONT_FLOOR, round(max_font, 1))
+        for run in runs:
+            if run.font.size is not None:
+                run.font.size = Pt(new_pt)
+
+
+def _is_prose_shape(shape):
+    return (
+        getattr(shape, "has_text_frame", False)
+        and shape.width is not None
+        and shape.width > PROSE_MIN_WIDTH
+        and len(shape.text_frame.text.strip()) > PROSE_MIN_CHARS
+    )
+
+
+def _snapshot_layout(slide):
+    """리플로우 전 상태(도형 위치·높이, 본문 런 폰트pt)를 저장. 폰트 축소 재시도용."""
+    pos, fonts = {}, {}
+    for shape in slide.shapes:
+        if shape.top is not None and shape.height is not None:
+            pos[shape.shape_id] = (shape.top, shape.height)
+        if getattr(shape, "has_text_frame", False):
+            for pi, para in enumerate(shape.text_frame.paragraphs):
+                for ri, run in enumerate(para.runs):
+                    if run.font.size is not None:
+                        fonts[(shape.shape_id, pi, ri)] = run.font.size.pt
+    return pos, fonts
+
+
+def _restore_layout(slide, snapshot):
+    pos, fonts = snapshot
+    for shape in slide.shapes:
+        if shape.shape_id in pos:
+            shape.top, shape.height = pos[shape.shape_id]
+        if getattr(shape, "has_text_frame", False):
+            for pi, para in enumerate(shape.text_frame.paragraphs):
+                for ri, run in enumerate(para.runs):
+                    key = (shape.shape_id, pi, ri)
+                    if key in fonts:
+                        run.font.size = Pt(fonts[key])
+
+
+def _max_bottom(slide):
+    bottom = 0
+    for shape in slide.shapes:
+        if shape.top is not None and shape.height is not None:
+            bottom = max(bottom, shape.top + shape.height)
+    return bottom
+
+
+def fit_slide_to_height(slide, content_ids, target_bottom, guard=FIT_TITLE_GUARD):
+    """내용이 target_bottom(A4) 안에 들도록 본문 폰트를 단계적으로 축소하며 리플로우.
+    제목·과목 영역(guard 위)은 축소하지 않는다. 반환: (적용 scale, 맞췄는지)."""
+    snapshot = _snapshot_layout(slide)
+    fonts = snapshot[1]
+    last_scale = 1.0
+    for scale in FIT_SCALES:
+        _restore_layout(slide, snapshot)
+        if scale < 1.0:
+            # 본문(강의특징/관리)은 scale 그대로 줄이고, 정보 그리드·진도표는 REST_FLOOR 위에서만 줄여 가독성 유지.
+            rest_scale = max(scale, REST_FLOOR)
+            for shape in slide.shapes:
+                if shape.top is None or shape.top < guard:
+                    continue
+                if not getattr(shape, "has_text_frame", False):
+                    continue
+                s = scale if _is_prose_shape(shape) else rest_scale
+                for pi, para in enumerate(shape.text_frame.paragraphs):
+                    for ri, run in enumerate(para.runs):
+                        key = (shape.shape_id, pi, ri)
+                        if key in fonts:
+                            run.font.size = Pt(round(fonts[key] * s, 1))
+        reflow_slide(slide, content_ids)
+        last_scale = scale
+        if _max_bottom(slide) <= target_bottom:
+            return scale, True
+    return last_scale, False
 
 
 def clone_template_slide(prs, template_slide):
@@ -63,20 +254,38 @@ def progress_date_display(row):
     return text_value(row.get("날짜", ""))
 
 
+HOLIDAY_RED = RGBColor(0xC0, 0x00, 0x00)   # 진도계획 휴강 표시 색
+
+
 def progress_content_display(row):
     values = [row.get("수업 주제", ""), row.get("상세 내용", ""), row.get("비고", "")]
-    return "\n".join(text_value(value) for value in values if text_value(value).strip())
+    lines = []
+    for value in values:
+        text = text_value(value).strip()
+        if text and text not in lines:   # 중복 줄 제거(휴강\n휴강 → 휴강)
+            lines.append(text)
+    return "\n".join(lines)
 
 
 def build_placeholder_map(lecture):
     fields = lecture.get("fields", {})
+    # 큰 글씨 = 강좌명, 작은 글씨 = 제목 우선(단 제목이 비었거나 강좌명과 같으면 서브 슬로건).
+    course_name = fields.get("강좌명", "")
+    main_title = fields.get("메인 제목", "")
+    sub_slogan = fields.get("서브 슬로건", "")
+    small_caption = (
+        main_title
+        if main_title.strip() and main_title.strip() != course_name.strip()
+        else sub_slogan
+    )
     placeholder_map = {
         "강좌유형": fields.get("강좌 유형", ""),
         "구분": fields.get("구분", ""),
         "학년": fields.get("학년", ""),
-        "서브슬로건": fields.get("서브 슬로건", ""),
-        "메인제목": fields.get("메인 제목", ""),
-        "과목": fields.get("과목", ""),
+        "강의형태": fields.get("강의형태", ""),
+        "서브슬로건": small_caption,   # 작은 글씨(상단)
+        "메인제목": course_name,       # 큰 글씨 = 강좌명
+        "과목": normalize_subject(fields.get("과목", "")),
         "강사명": fields.get("강사명", ""),
         "강좌명": fields.get("강좌명", ""),
         "개강일": lecture.get("opening_date_display", ""),
@@ -123,6 +332,9 @@ def replace_placeholders_in_paragraph(paragraph, placeholder_map):
     paragraph.runs[0].text = replaced
     for run in paragraph.runs[1:]:
         run.text = ""
+    # 진도계획 휴강은 빨간색으로(휴강일 필드는 강의개요에서 빠져 여기 외엔 '휴강'으로 시작하는 셀 없음).
+    if replaced.strip().startswith("휴강"):
+        paragraph.runs[0].font.color.rgb = HOLIDAY_RED
 
 
 def replace_placeholders_in_text_frame(text_frame, placeholder_map):
@@ -241,14 +453,29 @@ def generate_pptx_from_template(
     reports = []
     generated_slides = []
     slide_subjects = []
-    max_growth = 0
+    # 슬라이드는 프레젠테이션당 한 크기만 가능 → A4(템플릿 높이) 고정. 넘치는 슬라이드는 본문 폰트를 줄여 맞춘다.
+    target_bottom = prs.slide_height - A4_BOTTOM_MARGIN
 
     for lecture in lectures:
         reports.extend(validate_required_values(lecture))
         reports.extend(validate_progress_overflow(lecture))
         slide = clone_template_slide(prs, template_slide)
         replace_placeholders_in_slide(slide, build_placeholder_map(lecture))
-        max_growth = max(max_growth, reflow_slide(slide, content_ids))
+        fit_oneline_badges(slide)
+        fit_title(slide)
+        fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
+        if not fitted:
+            reports.append(
+                report_row(
+                    "확인필요",
+                    lecture,
+                    "PPTX",
+                    "A4_OVERFLOW",
+                    f"본문이 많아 최소 폰트({int(FIT_SCALES[-1] * 100)}%)로도 A4 한 장을 넘깁니다. 본문 축약을 권장합니다.",
+                    raw_value=f"scale={fit_scale}",
+                    suggestion="강의특징/관리 프로그램 문구를 줄이면 가독성이 좋아집니다.",
+                )
+            )
         teacher_name = lecture.get("fields", {}).get("강사명", "")
         inserted_photo = apply_teacher_photo(slide, teacher_name, teacher_photo_dir)
         if teacher_photo_dir and not inserted_photo:
@@ -279,9 +506,7 @@ def generate_pptx_from_template(
         slide_subjects.append(lecture.get("fields", {}).get("과목", ""))
 
     remove_slide(prs, template_slide)
-    # 모든 슬라이드가 공유하는 슬라이드 높이를, 가장 많이 늘어난 슬라이드에 맞춰 확장.
-    if max_growth:
-        prs.slide_height = int(prs.slide_height + max_growth)
+    # 슬라이드 높이는 A4(템플릿 그대로) 유지 — fit_slide_to_height가 내용을 A4 안에 맞춰 둠.
     # 최종 슬라이드 크기가 정해진 뒤 과목 색 테두리를 두른다(테두리가 전체 면적을 감싸야 하므로).
     for slide, subject in zip(generated_slides, slide_subjects):
         add_subject_band(slide, subject, prs.slide_width, prs.slide_height)

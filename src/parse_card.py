@@ -1,4 +1,5 @@
 import re
+import unicodedata
 
 
 PROGRESS_HEADERS = ("회차", "날짜", "수업 주제", "상세 내용", "비고")
@@ -54,9 +55,10 @@ def parse_lecture_sheet(ws, source_file):
                 continue
             progress_rows.append(dict(zip(PROGRESS_HEADERS, values)))
 
+    # 파일명/시트명은 macOS 등에서 자모 분해(NFD)된 채 들어와 엑셀 셀에서 깨져 보임 → NFC로 합성.
     lecture = {
-        "source_file": source_file,
-        "source_sheet": ws.title,
+        "source_file": unicodedata.normalize("NFC", source_file or ""),
+        "source_sheet": unicodedata.normalize("NFC", ws.title or ""),
         "fields": fields,
         "progress": progress_rows,
     }

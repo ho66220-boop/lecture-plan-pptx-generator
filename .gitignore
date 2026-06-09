@@ -14,6 +14,8 @@ output/
 
 # FAQ 포함 원본 백업(브랜딩 문구 포함)
 templates/*FAQ포함*backup*.pptx
+# 템플릿 작업용 백업본
+templates/*backup*.pptx
 
 # ===== 작업 캐시/내부 =====
 __pycache__/
@@ -21,3 +23,9 @@ __pycache__/
 .pytest_cache/
 memory/
 .DS_Store
+
+# 임시 작업/덤프 파일
+_*.txt
+_*.png
+_*.pptx
+_*.py

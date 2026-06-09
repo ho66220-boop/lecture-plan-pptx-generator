@@ -17,9 +17,9 @@ from pptx.util import Emu
 EMU_PER_PT = 12700.0
 EMU_PER_CM = 360000.0
 
-LINE_SLOT = 1.30        # 한 줄이 차지하는 높이(폰트 pt 배수, 실제 렌더 줄높이 + 여유)
+LINE_SLOT = 1.22        # 한 줄이 차지하는 높이(폰트 pt 배수, 실제 렌더 줄높이에 근접). 과대 추정 시 박스가 떠 보임.
 DEFAULT_FONT_PT = 9.0
-PAD = 0.09 * EMU_PER_CM            # 박스 안 글자 상·하 여백(각 측). 중앙 정렬과 함께 숨 쉴 공간 확보.
+PAD = 0.06 * EMU_PER_CM            # 박스 안 글자 상·하 여백(각 측). 중앙 정렬 시 상하 여백 일정(과대 시 정보 그리드까지 부풂).
 OVERFLOW_TOL = 0.10 * EMU_PER_CM   # 이만큼 넘쳐야 확장(미세 넘침 무시)
 MIN_GROW = 0.06 * EMU_PER_CM       # 이보다 작은 확장은 0으로 스냅
 THIN_HEIGHT = 0.30 * EMU_PER_CM    # 이보다 얇은 도형은 장식선 → 키우지 않음
@@ -50,10 +50,13 @@ def _insets_pt(text_frame):
     )
 
 
-def _est_lines(text, width_pt, font_pt):
+def _est_lines(text, width_pt, font_pt, wrap=True):
     text = (text or "").rstrip("\n \t")
     if not text:
         return 0
+    if not wrap:
+        # 자동 줄바꿈 off → 명시적 줄바꿈(\n) 수만큼만 줄로 센다(가로 넘침은 박스 높이와 무관).
+        return max(1, len(text.split("\n")))
     total = 0
     for line in text.split("\n"):
         if not line:
@@ -72,7 +75,8 @@ def _needed_bottom_emu(shape):
     mt, mb, ml, mr = _insets_pt(tf)
     font_pt = _first_font_pt(shape)
     width_pt = shape.width / EMU_PER_PT - ml - mr
-    lines = _est_lines(tf.text, width_pt, font_pt)
+    wrap = tf.word_wrap if tf.word_wrap is not None else True
+    lines = _est_lines(tf.text, width_pt, font_pt, wrap)
     text_h_pt = lines * font_pt * LINE_SLOT
     needed_h_emu = (mt + text_h_pt + mb) * EMU_PER_PT + 2 * PAD
     return shape.top + int(round(needed_h_emu))
