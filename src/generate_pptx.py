@@ -276,21 +276,70 @@ def progress_content_display(row):
     return "\n".join(lines)
 
 
-# 진도표 우측 컬럼(헤더 + 데이터 셀) 도형 id. 5주 이하라 우측이 전부 비면 이 도형들을 지운다.
-RIGHT_PROGRESS_IDS = frozenset({
-    72, 73, 74, 75,                              # 우측 헤더(주차 / 단원 및 수업내용)
-    80, 81, 82, 83, 88, 89, 90, 91, 96, 97, 98, 99,
-    104, 105, 106, 107, 112, 113, 114, 115,      # 우측 데이터 셀(배경 + 글상자) 5행
-})
-PROGRESS_SINGLE_COL_MAX = 5                       # 진도 수가 이 이하면 좌측 한 컬럼에 다 들어감
+PROGRESS_MAX_PER_COL = 5     # 한 컬럼(좌/우) 최대 행 수
+PROGRESS_ROW_GAP_CM = 0.45   # 진도표 행 클러스터링 임계(행 내 도형 간격 < 이 값 < 행 사이 간격)
 
 
-def hide_empty_right_progress(slide):
-    """진도 우측 컬럼을 삭제(헤더만 남아 '미완성'으로 보이는 문제 방지).
-    좌측 5행에 다 들어가 우측이 전부 빈 경우에만 호출할 것."""
-    for shape in list(slide.shapes):
-        if shape.shape_id in RIGHT_PROGRESS_IDS:
-            shape._element.getparent().remove(shape._element)
+def progress_split(n):
+    """진도 n개를 좌우 균형 분배. 좌측=ceil(n/2)(최대 5), 우측=나머지(최대 5).
+    읽기 순서: 좌측 위→아래가 앞 회차, 그다음 우측. 예) 4→(2,2), 9→(5,4), 10→(5,5)."""
+    n = min(n, PROGRESS_MAX_PER_COL * 2)
+    left = min(PROGRESS_MAX_PER_COL, (n + 1) // 2)
+    return left, n - left
+
+
+def _cluster_by_top(shapes, gap_emu):
+    """top 기준으로 도형을 '행'으로 묶는다(연속 정렬 후 간격 > gap이면 새 행)."""
+    rows = []
+    for sh in sorted(shapes, key=lambda s: s.top):
+        if rows and sh.top - rows[-1][-1].top <= gap_emu:
+            rows[-1].append(sh)
+        else:
+            rows.append([sh])
+    return rows
+
+
+def balance_progress_columns(slide, left_count, right_count):
+    """진도표에서 채우지 않는 칸의 도형(배경+글상자)을 삭제한다. 칸 식별은 id가 아니라 위치:
+    진도 섹션 제목 아래 도형을 top으로 묶어 '행', left로 갈라 '좌/우 컬럼'을 판별.
+    우측이 한 칸도 없을 때(right_count==0)만 우측 헤더도 삭제."""
+    title = None
+    for sh in slide.shapes:                              # 진도 섹션 제목(가장 아래의 '진도' 텍스트)
+        if getattr(sh, "has_text_frame", False) and sh.top is not None and "진도" in sh.text_frame.text:
+            if title is None or sh.top > title.top:
+                title = sh
+    if title is None:
+        return
+    min_dim = int(0.3 * EMU_PER_CM)
+    region = [
+        sh for sh in slide.shapes
+        if sh.top is not None and sh.height is not None and sh.width is not None
+        and sh.top > title.top + min_dim          # 제목보다 아래
+        and sh.width > min_dim and sh.height > min_dim   # 장식 바(얇은 선) 제외
+    ]
+    rows = _cluster_by_top(region, int(PROGRESS_ROW_GAP_CM * EMU_PER_CM))
+    if len(rows) < 2:
+        return
+    header, data_rows = rows[0], rows[1 : 1 + PROGRESS_MAX_PER_COL]
+
+    lefts = sorted({sh.left for sh in region})           # 좌/우 컬럼 경계 = 가장 큰 left 간격
+    boundary, best = None, -1
+    for a, b in zip(lefts, lefts[1:]):
+        if b - a > best:
+            best, boundary = b - a, (a + b) // 2
+    if boundary is None:
+        return
+
+    to_delete = []
+    for r, row in enumerate(data_rows, start=1):
+        if r > left_count:
+            to_delete += [sh for sh in row if sh.left < boundary]
+        if r > right_count:
+            to_delete += [sh for sh in row if sh.left >= boundary]
+    if right_count == 0:                                  # 우측 통째로 안 쓰면 우측 헤더도 제거
+        to_delete += [sh for sh in header if sh.left >= boundary]
+    for sh in to_delete:
+        sh._element.getparent().remove(sh._element)
 
 
 def build_placeholder_map(lecture):
@@ -325,15 +374,17 @@ def build_placeholder_map(lecture):
         "관리프로그램": fields.get("관리 프로그램", ""),
     }
 
+    # 진도 좌우 균형 분배: 좌측=ceil(n/2), 우측=나머지. 좌측 위→아래가 앞 회차, 그다음 우측.
     progress_rows = lecture.get("progress", [])
+    left_count, right_count = progress_split(len(progress_rows))
     for idx in range(1, 6):
-        row = progress_rows[idx - 1] if len(progress_rows) >= idx else {}
+        row = progress_rows[idx - 1] if idx <= left_count else {}
         placeholder_map[f"진도_좌_{idx}_날짜"] = progress_date_display(row) if row else ""
         placeholder_map[f"진도_좌_{idx}_내용"] = progress_content_display(row) if row else ""
 
     for idx in range(1, 6):
-        source_index = idx + 4
-        row = progress_rows[source_index] if len(progress_rows) > source_index else {}
+        source_index = left_count + idx - 1
+        row = progress_rows[source_index] if idx <= right_count else {}
         placeholder_map[f"진도_우_{idx}_날짜"] = progress_date_display(row) if row else ""
         placeholder_map[f"진도_우_{idx}_내용"] = progress_content_display(row) if row else ""
 
@@ -487,8 +538,8 @@ def generate_pptx_from_template(
         reports.extend(validate_progress_overflow(lecture))
         slide = clone_template_slide(prs, template_slide)
         replace_placeholders_in_slide(slide, build_placeholder_map(lecture))
-        if len(lecture.get("progress", [])) <= PROGRESS_SINGLE_COL_MAX:
-            hide_empty_right_progress(slide)   # 5주 이하: 빈 우측 컬럼 제거
+        left_count, right_count = progress_split(len(lecture.get("progress", [])))
+        balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
         fit_oneline_badges(slide)
         fit_title(slide)
         fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
