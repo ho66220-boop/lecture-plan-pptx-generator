@@ -62,9 +62,10 @@ def _in_target_month(parsed, year, month):
 
 
 def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=None):
-    """target_month(int, 예: 7)가 주어지면 '정규반 월별 계획서' 모드:
-    정규반만, 진도를 그 달(base_year+target_month)만 잘라 회차·기간·수강료를 재계산한다.
-    대상에서 빠지면(특강이거나 그 달 수업 0회) (None, reports)를 돌려 슬라이드를 만들지 않는다.
+    """target_month(int, 예: 7)가 주어지면 '월별 계획서' 모드:
+    정규반은 진도를 그 달(base_year+target_month)만 잘라 회차·기간·수강료를 재계산한다.
+    특강(썸머특강 등)은 패키지 단위라 월로 쪼개지 않고 전체 기간 그대로 항상 포함한다.
+    그 달 수업이 0회인 정규반만 (None, reports)를 돌려 슬라이드를 만들지 않는다.
     target_month=None이면 기존 동작(전체 기간, 전 강좌) 그대로."""
     fields = raw.get("fields", {})
     lecture_id = f"L{index:03d}_{raw.get('source_sheet', '')}"
@@ -80,24 +81,25 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
     reports = []
     real_class_dates = []
 
-    # 정규/특강 판별(청구 + 월별 필터 공유). 월별 모드에서 특강은 제외(정규반 전용).
+    # 정규/특강 판별(청구 + 월별 필터 공유).
     is_regular, billing = classify_billing(fields)
-    if target_month is not None and not is_regular:
-        return None, []
+    # 월별 모드라도 특강은 패키지 단위(썸머특강 등)라 월로 쪼개지 않고 전체 기간 그대로 넣는다.
+    # → 엑셀에 있으면 어느 달 계획서를 뽑든 항상 포함. 정규반만 그 달로 슬라이싱한다.
+    slice_month = target_month if (target_month is not None and is_regular) else None
 
     # 다음 달(미리보기용). 12월이면 다음 해 1월.
     next_year, next_month = None, None
-    if target_month is not None:
-        next_month = 1 if target_month == 12 else target_month + 1
-        next_year = base_year + 1 if target_month == 12 else base_year
+    if slice_month is not None:
+        next_month = 1 if slice_month == 12 else slice_month + 1
+        next_year = base_year + 1 if slice_month == 12 else base_year
 
     for row_idx, row in enumerate(raw.get("progress", []), start=1):
         parsed, claimed_weekday = parse_date(row.get("날짜"), base_year=base_year)
         # 월별 모드: 이번 달 + 다음 달 행만 처리. 둘 다 아니면 제외.
         # 날짜를 못 읽는 행은 달을 알 수 없어 제외하되 리포트에 남긴다(조용히 버리지 않음).
         is_next = False
-        if target_month is not None:
-            in_this = _in_target_month(parsed, base_year, target_month)
+        if slice_month is not None:
+            in_this = _in_target_month(parsed, base_year, slice_month)
             is_next = _in_target_month(parsed, next_year, next_month)
             if not (in_this or is_next):
                 if row.get("날짜") and not parsed:
@@ -107,7 +109,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                             lecture,
                             "진도표 날짜",
                             "DATE_PARSE_FAILED",
-                            f"진도표 {row_idx}행 날짜를 해석하지 못해 {target_month}월 계획서에서 제외했습니다.",
+                            f"진도표 {row_idx}행 날짜를 해석하지 못해 {slice_month}월 계획서에서 제외했습니다.",
                             raw_value=row.get("날짜", ""),
                             suggestion="예: 7/20(월), 2026-07-20 형식으로 입력해 주세요.",
                         )
@@ -187,7 +189,8 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
         lecture["progress"].append(row)
 
     # 월별 모드: 그 달에 실제 수업이 0회인 정규반은 슬라이드를 만들지 않는다(빈 장 방지).
-    if target_month is not None and not real_class_dates:
+    # 특강은 slice_month=None이라 이 조건을 타지 않고 전체 기간 그대로 유지된다.
+    if slice_month is not None and not real_class_dates:
         return None, reports
 
     first_date = min(real_class_dates) if real_class_dates else None
@@ -272,6 +275,6 @@ def normalize_lectures(raw_lectures, base_year, academic_calendar_path=None, tar
             raw, index, base_year, calendar_events, target_month
         )
         reports.extend(lecture_reports)
-        if lecture is not None:   # 월별 모드: 특강·그 달 0회는 None → 슬라이드 제외
+        if lecture is not None:   # 월별 모드: 그 달 0회 정규반만 None → 슬라이드 제외(특강은 항상 포함)
             normalized.append(lecture)
     return normalized, reports
