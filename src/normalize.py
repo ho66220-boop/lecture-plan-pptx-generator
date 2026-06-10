@@ -50,8 +50,11 @@ def classify_billing(fields):
     gubun = fields.get("구분", "")
     season = fields.get("시즌", "")
     is_regular = "정규" in gubun
+    # 특강 표시는 구분/시즌 어디에 적어도 인정한다. 시즌에 '특강' 단어 없이 '썸머'/'윈터'만
+    # 적은 경우(예: 시즌="윈터")도 특강으로 본다 — 둘을 대칭으로 처리(과거엔 썸머만 잡혔음).
     is_special = (not is_regular) and (
-        ("특강" in gubun) or ("썸머" in season) or ("특강" in season)
+        ("특강" in gubun) or ("특강" in season)
+        or ("썸머" in season) or ("윈터" in season)
     )
     return is_regular, ("total" if is_special else "monthly")
 
@@ -93,8 +96,19 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
         next_month = 1 if slice_month == 12 else slice_month + 1
         next_year = base_year + 1 if slice_month == 12 else base_year
 
+    # 진도표는 위→아래 시간순이므로, 월이 줄어들면(예: 12→1) 해를 넘긴 것으로 보고 연도를 +1.
+    # (윈터 시즌처럼 12월→1월에 걸친 강좌의 날짜·요일·월 필터가 base_year 고정으로 틀어지는 것을 막음.)
+    year_offset = 0
+    prev_month = None
+
     for row_idx, row in enumerate(raw.get("progress", []), start=1):
         parsed, claimed_weekday = parse_date(row.get("날짜"), base_year=base_year)
+        if parsed is not None:
+            if prev_month is not None and parsed.month < prev_month:
+                year_offset += 1
+            prev_month = parsed.month
+            if year_offset:
+                parsed = parsed.replace(year=parsed.year + year_offset)
         # 월별 모드: 이번 달 + 다음 달 행만 처리. 둘 다 아니면 제외.
         # 날짜를 못 읽는 행은 달을 알 수 없어 제외하되 리포트에 남긴다(조용히 버리지 않음).
         is_next = False
