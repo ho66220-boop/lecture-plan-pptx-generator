@@ -5,9 +5,11 @@ from openpyxl import load_workbook
 try:
     from config.defaults import SKIP_SHEET_KEYWORDS
     from src.parse_card import is_empty_lecture, parse_lecture_sheet
+    from src.validate import report_row
 except ModuleNotFoundError:
     from ..config.defaults import SKIP_SHEET_KEYWORDS
     from .parse_card import is_empty_lecture, parse_lecture_sheet
+    from .validate import report_row
 
 
 def iter_workbooks(input_path):
@@ -27,9 +29,27 @@ def should_skip_sheet(sheet_name):
 
 
 def collect_lectures(input_path):
+    """입력 폴더/파일의 강좌 시트를 수집. (lectures, reports) 반환.
+    열 수 없는 파일(깨짐·암호·확장자만 xlsx 등)은 그 파일만 건너뛰고 리포트에 남겨
+    나머지 강사 파일 처리는 계속한다(한 파일 때문에 전체가 멈추지 않도록)."""
     lectures = []
+    reports = []
     for workbook_path in iter_workbooks(input_path):
-        wb = load_workbook(workbook_path, data_only=True)
+        try:
+            wb = load_workbook(workbook_path, data_only=True)
+        except Exception as exc:   # BadZipFile/InvalidFileException/암호 보호 등 — 파일 단위로 격리
+            reports.append(
+                report_row(
+                    "오류",
+                    {"source_file": workbook_path.name},
+                    "입력 파일",
+                    "FILE_READ_FAILED",
+                    f"엑셀 파일을 열지 못해 건너뛰었습니다: {type(exc).__name__}",
+                    raw_value=workbook_path.name,
+                    suggestion="파일이 손상되었거나 암호가 걸렸는지 확인하고, .xlsx 형식으로 다시 저장해 주세요.",
+                )
+            )
+            continue
         for ws in wb.worksheets:
             if should_skip_sheet(ws.title):
                 continue
@@ -37,4 +57,4 @@ def collect_lectures(input_path):
             if is_empty_lecture(lecture):
                 continue
             lectures.append(lecture)
-    return lectures
+    return lectures, reports

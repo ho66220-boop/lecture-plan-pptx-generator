@@ -38,11 +38,12 @@ def run_pipeline(
         default_photo_dir = Path("teacher_photos")
         teacher_photo_dir = str(default_photo_dir) if default_photo_dir.is_dir() else None
 
-    raw_lectures = collect_lectures(input_path)
+    raw_lectures, collect_reports = collect_lectures(input_path)
     # target_month(예: 7)이 주어지면 정규반 월별 계획서 모드(그 달만 잘라 재계산).
     lectures, reports = normalize_lectures(
         raw_lectures, base_year, academic_calendar_path, target_month
     )
+    reports = collect_reports + reports   # 파일 열기 실패(FILE_READ_FAILED)도 리포트에 포함
     if not lectures:
         reports.append(empty_report_row())
 
