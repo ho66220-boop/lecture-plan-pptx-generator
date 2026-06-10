@@ -15,6 +15,27 @@ from pptx.oxml.ns import qn
 EMU_PER_CM = 360000.0
 PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
+# 우상단 정사각 사진 박스 식별 기준(reflow·photo 공용 — 한 군데에서만 정의).
+PHOTO_BOX_MAX_TOP = 2.0 * EMU_PER_CM     # 이보다 위(상단)
+PHOTO_BOX_MIN_LEFT = 13.5 * EMU_PER_CM   # 이보다 오른쪽
+PHOTO_BOX_MIN_SIZE = 3.0 * EMU_PER_CM    # 최소 한 변 길이
+PHOTO_BOX_SQUARE_TOL = 0.5 * EMU_PER_CM  # 가로·세로 차이 허용(정사각 판정)
+
+
+def is_photo_box(shape):
+    """우상단의 빈(텍스트 없는) 정사각형 사진 박스인지 위치·형태로 판별.
+    teacher_photo(사진 채우기 대상 탐색)와 reflow(높이 확장 보호) 양쪽에서 공유한다."""
+    if shape.top is None or shape.left is None or shape.width is None or shape.height is None:
+        return False
+    if getattr(shape, "has_text_frame", False) and shape.text_frame.text.strip():
+        return False
+    return (
+        shape.top < PHOTO_BOX_MAX_TOP
+        and shape.left > PHOTO_BOX_MIN_LEFT
+        and shape.width > PHOTO_BOX_MIN_SIZE
+        and abs(shape.width - shape.height) < PHOTO_BOX_SQUARE_TOL
+    )
+
 
 def _name_key(stem):
     """사진 파일명에서 강사 '이름'만 추출해 정규화.
@@ -38,18 +59,10 @@ _FILL_TAGS = ("a:noFill", "a:solidFill", "a:gradFill", "a:blipFill", "a:pattFill
 
 
 def find_photo_box(slide):
-    """우상단의 정사각형 사진 박스를 위치·형태로 찾는다."""
+    """우상단의 정사각형 사진 박스를 찾는다(여럿이면 가장 큰 것)."""
     best = None
     for sh in slide.shapes:
-        if sh.top is None or sh.width is None or sh.height is None:
-            continue
-        if getattr(sh, "has_text_frame", False) and sh.text_frame.text.strip():
-            continue
-        top_cm = sh.top / EMU_PER_CM
-        left_cm = sh.left / EMU_PER_CM
-        is_square = abs(sh.width - sh.height) < 0.5 * EMU_PER_CM
-        big_enough = sh.width > 3.0 * EMU_PER_CM
-        if top_cm < 2.0 and left_cm > 13.5 and is_square and big_enough:
+        if is_photo_box(sh):
             if best is None or (sh.width * sh.height) > (best.width * best.height):
                 best = sh
     return best
