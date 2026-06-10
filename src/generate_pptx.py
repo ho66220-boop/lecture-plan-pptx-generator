@@ -9,12 +9,14 @@ from pptx.enum.shapes import MSO_SHAPE_TYPE
 from pptx.util import Pt
 
 try:
+    from config.defaults import HOLIDAY_KEYWORDS
     from src.date_utils import format_date_dot
     from src.reflow import reflow_slide
     from src.subject_band import add_subject_band
     from src.teacher_photo import apply_teacher_photo
     from src.validate import report_row
 except ModuleNotFoundError:
+    from ..config.defaults import HOLIDAY_KEYWORDS
     from .date_utils import format_date_dot
     from .reflow import reflow_slide
     from .subject_band import add_subject_band
@@ -305,8 +307,9 @@ def balance_progress_columns(slide, left_count, right_count):
     진도 섹션 제목 아래 도형을 top으로 묶어 '행', left로 갈라 '좌/우 컬럼'을 판별.
     우측이 한 칸도 없을 때(right_count==0)만 우측 헤더도 삭제."""
     title = None
-    for sh in slide.shapes:                              # 진도 섹션 제목(가장 아래의 '진도' 텍스트)
-        if getattr(sh, "has_text_frame", False) and sh.top is not None and "진도" in sh.text_frame.text:
+    for sh in slide.shapes:                              # 진도 섹션 제목('주차별 진도 계획')
+        # 데이터 칸에도 치환 후 '진도'가 들어갈 수 있으므로 섹션 제목 문구로 좁혀 오인을 막는다.
+        if getattr(sh, "has_text_frame", False) and sh.top is not None and "주차별 진도" in sh.text_frame.text:
             if title is None or sh.top > title.top:
                 title = sh
     if title is None:
@@ -428,7 +431,9 @@ def replace_placeholders_in_paragraph(paragraph, placeholder_map, gray_keys=()):
     for run in paragraph.runs[1:]:
         run.text = ""
     # 휴강 빨강이 회색보다 우선. 그 외 다음 달 미리보기 행은 회색.
-    if replaced.strip().startswith("휴강"):
+    # 회차 제외 판정(is_holiday_row)과 동일하게 HOLIDAY_KEYWORDS 부분일치로 통일
+    # ('내신기간 휴강'·'8/31 휴강'처럼 '휴강'으로 시작하지 않아도 빨강 처리).
+    if any(keyword in replaced for keyword in HOLIDAY_KEYWORDS):
         paragraph.runs[0].font.color.rgb = HOLIDAY_RED
     elif gray_keys and any(key in gray_keys for key in keys):
         paragraph.runs[0].font.color.rgb = NEXT_MONTH_GRAY
