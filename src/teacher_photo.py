@@ -40,15 +40,15 @@ def is_photo_box(shape):
 def _name_key(stem):
     """사진 파일명에서 강사 '이름'만 추출해 정규화.
 
-    지원 형식:
-      홍길동.jpg                 -> 홍길동
-      academy_국어_홍길동2.png     -> 홍길동   (academy_과목_이름 + 뒤 숫자)
+    접두사는 무엇이든 무관(마지막 '_' 뒤를 이름으로 본다). 지원 형식:
+      홍길동.jpg                    -> 홍길동
+      academy_국어_홍길동2.png       -> 홍길동   (배포처_과목_이름 + 뒤 숫자)
       academy_수리논술_홍길동2 (1).png -> 홍길동
-      academy_수학_홍길동[1].png   -> 홍길동
+      academy_수학_홍길동[1].png     -> 홍길동
     """
     s = unicodedata.normalize("NFC", stem)
     if "_" in s:
-        s = s.rsplit("_", 1)[-1]            # academy_과목_이름 -> 이름...
+        s = s.rsplit("_", 1)[-1]            # 배포처_과목_이름 -> 이름...
     s = re.sub(r"[\(\[][^)\]]*[\)\]]", "", s)  # (1), [1], (2) 등 중복표시 제거
     s = re.sub(r"\d+$", "", s.strip())          # 끝에 붙은 숫자 제거(홍길동2 -> 홍길동)
     return s.strip()
