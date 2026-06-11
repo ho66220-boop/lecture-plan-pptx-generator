@@ -24,6 +24,13 @@ EMU_PER_CM = 360000.0
 
 LINE_SLOT = 1.22        # 한 줄이 차지하는 높이(폰트 pt 배수, 실제 렌더 줄높이에 근접). 과대 추정 시 박스가 떠 보임.
 DEFAULT_FONT_PT = 9.0
+
+# 글자 폭 추정 비율(글자 advance / 폰트 pt). 줄바꿈·가로맞춤 계산의 핵심 가정.
+# Paperlogy 5 Medium 실측: 한글 음절 0.88, ASCII 평균 0.61(숫자만 0.67).
+# 폰트를 바꾸면 PIL ImageFont.getlength로 재측정해 이 두 값만 갱신하면 된다.
+# (참고: 맑은고딕은 1.00/0.52 — 폰트별로 폭이 달라 비율을 분리 상수로 둠.)
+GLYPH_W_KO = 0.88
+GLYPH_W_ASCII = 0.61
 PAD = 0.06 * EMU_PER_CM            # 박스 안 글자 상·하 여백(각 측). 중앙 정렬 시 상하 여백 일정(과대 시 정보 그리드까지 부풂).
 OVERFLOW_TOL = 0.10 * EMU_PER_CM   # 이만큼 넘쳐야 확장(미세 넘침 무시)
 MIN_GROW = 0.06 * EMU_PER_CM       # 이보다 작은 확장은 0으로 스냅
@@ -67,7 +74,7 @@ def _est_lines(text, width_pt, font_pt, wrap=True):
         if not line:
             total += 1
             continue
-        visual = sum((font_pt * 0.5) if ord(ch) < 128 else (font_pt * 1.0) for ch in line)
+        visual = sum((font_pt * GLYPH_W_ASCII) if ord(ch) < 128 else (font_pt * GLYPH_W_KO) for ch in line)
         total += max(1, math.ceil(visual / max(1.0, width_pt)))
     return max(1, total)
 

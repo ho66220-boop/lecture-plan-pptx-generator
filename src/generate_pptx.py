@@ -11,14 +11,14 @@ from pptx.util import Pt
 try:
     from config.defaults import HOLIDAY_KEYWORDS
     from src.date_utils import format_date_dot
-    from src.reflow import reflow_slide
+    from src.reflow import GLYPH_W_ASCII, GLYPH_W_KO, reflow_slide
     from src.subject_band import add_subject_band
     from src.teacher_photo import apply_teacher_photo
     from src.validate import report_row
 except ModuleNotFoundError:
     from ..config.defaults import HOLIDAY_KEYWORDS
     from .date_utils import format_date_dot
-    from .reflow import reflow_slide
+    from .reflow import GLYPH_W_ASCII, GLYPH_W_KO, reflow_slide
     from .subject_band import add_subject_band
     from .teacher_photo import apply_teacher_photo
     from .validate import report_row
@@ -76,8 +76,8 @@ def normalize_subject(subject):
 
 
 def _text_visual_pt(text, font_pt):
-    """한 줄 텍스트의 대략적 가로폭(pt). 한글=폰트pt, ASCII=절반 가량."""
-    return sum((font_pt * 0.55) if ord(ch) < 128 else float(font_pt) for ch in text)
+    """한 줄 텍스트의 대략적 가로폭(pt). 폭 비율은 reflow와 동일 상수 공유(폰트 실측 기준)."""
+    return sum((font_pt * GLYPH_W_ASCII) if ord(ch) < 128 else (font_pt * GLYPH_W_KO) for ch in text)
 
 
 def fit_oneline_badges(slide):
