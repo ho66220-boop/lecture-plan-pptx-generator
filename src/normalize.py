@@ -14,19 +14,34 @@ except ModuleNotFoundError:
 
 
 def load_academic_calendar(path):
+    """학사일정 CSV → {날짜ISO: [event,...]} 를 (events, reports)로 반환.
+    파일이 없으면 조용히 빈 dict. 읽기/디코딩 실패는 충돌 검사만 건너뛰고
+    리포트에 남긴다(파이프라인 전체를 멈추지 않음 — CSV는 설정 보조 자료)."""
     if not path:
-        return {}
+        return {}, []
     calendar_path = Path(path)
     if not calendar_path.exists():
-        return {}
+        return {}, []
 
     events = {}
-    with calendar_path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            parsed, _ = parse_date(row.get("날짜"))
-            if parsed:
-                events.setdefault(parsed.isoformat(), []).append(row)
-    return events
+    try:
+        with calendar_path.open("r", encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                parsed, _ = parse_date(row.get("날짜"))
+                if parsed:
+                    events.setdefault(parsed.isoformat(), []).append(row)
+    except Exception as exc:   # 인코딩 깨짐/권한/형식 오류 등 — 검사만 건너뛰고 계속
+        report = report_row(
+            "경고",
+            {"source_file": calendar_path.name},
+            "학사일정",
+            "CALENDAR_READ_FAILED",
+            f"학사일정 CSV를 읽지 못해 충돌 검사를 건너뜁니다: {type(exc).__name__}",
+            raw_value=str(path),
+            suggestion="CSV 인코딩(UTF-8)·형식을 확인하거나 학사일정 경로를 비워 주세요.",
+        )
+        return {}, [report]
+    return events, []
 
 
 def row_text(row):
@@ -280,9 +295,9 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
 
 def normalize_lectures(raw_lectures, base_year, academic_calendar_path=None, target_month=None):
-    calendar_events = load_academic_calendar(academic_calendar_path)
+    calendar_events, calendar_reports = load_academic_calendar(academic_calendar_path)
     normalized = []
-    reports = []
+    reports = list(calendar_reports)   # CSV 읽기 실패(CALENDAR_READ_FAILED)도 리포트에 포함
     # index는 raw 위치 기준(필터와 무관) → lecture_id가 월별 실행에서도 안정적으로 유지된다.
     for index, raw in enumerate(raw_lectures, start=1):
         lecture, lecture_reports = normalize_lecture(

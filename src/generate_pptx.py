@@ -541,7 +541,14 @@ def generate_pptx_from_template(
     output_path,
     teacher_photo_dir=None,
 ):
-    prs = Presentation(template_path)
+    # 템플릿은 산출의 필수 전제 — 없거나 깨지면 격리할 수 없으니 명확한 메시지로 즉시 실패.
+    try:
+        prs = Presentation(template_path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"마스터 템플릿을 열 수 없습니다: {template_path} ({type(exc).__name__}). "
+            "templates/강의계획서_마스터템플릿.pptx 파일이 있는지, 손상되지 않은 .pptx 인지 확인해 주세요."
+        ) from exc
     if not prs.slides:
         raise ValueError("Template PPTX has no slides.")
 
@@ -584,8 +591,25 @@ def generate_pptx_from_template(
                 )
             )
         teacher_name = lecture.get("fields", {}).get("강사명", "")
-        inserted_photo = apply_teacher_photo(slide, teacher_name, teacher_photo_dir)
-        if teacher_photo_dir and not inserted_photo:
+        # 사진 삽입 실패(깨진/0바이트 이미지 등)는 그 강좌만 회색 박스로 두고 계속 — 전체 중단 방지.
+        photo_error = None
+        try:
+            inserted_photo = apply_teacher_photo(slide, teacher_name, teacher_photo_dir)
+        except Exception as exc:
+            inserted_photo = None
+            photo_error = exc
+        if teacher_photo_dir and not inserted_photo and photo_error is not None:
+            reports.append(
+                report_row(
+                    "확인필요",
+                    lecture,
+                    "강사 사진",
+                    "TEACHER_PHOTO_INSERT_FAILED",
+                    f"'{teacher_name}' 사진을 슬라이드에 삽입하지 못해 회색 박스로 둡니다: {type(photo_error).__name__}",
+                    suggestion="사진 파일이 손상되었거나 0바이트인지 확인해 주세요.",
+                )
+            )
+        elif teacher_photo_dir and not inserted_photo:
             reports.append(
                 report_row(
                     "확인필요",
