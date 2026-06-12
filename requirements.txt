@@ -1,3 +1,4 @@
-pandas
-openpyxl
-python-pptx
+# 검증된 버전(현재 운영 기준)으로 고정 — 상위 버전 변경이 산출물을 조용히 깨뜨리지 않도록.
+# pandas는 코드에서 쓰지 않아 제외(설치 시간·용량 절약).
+openpyxl==3.1.5
+python-pptx==1.0.2
