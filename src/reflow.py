@@ -115,7 +115,12 @@ def reflow_slide(slide, content_ids=None):
 
     content_ids: 세로 중앙 정렬을 적용할 도형 id 집합(placeholder 값 박스). None이면 정렬은 건드리지 않음.
     """
-    shapes = [sh for sh in slide.shapes if sh.top is not None and sh.height is not None]
+    # width까지 not None인 도형만 처리한다. width=None이면 _needed_bottom_emu의
+    # `shape.width / EMU_PER_PT`에서 TypeError가 나므로 여기서 제외(좌표 미상 도형 방어).
+    shapes = [
+        sh for sh in slide.shapes
+        if sh.top is not None and sh.height is not None and sh.width is not None
+    ]
     if not shapes:
         return 0
 
