@@ -1,6 +1,6 @@
 BASE_YEAR = 2026
 
-SKIP_SHEET_KEYWORDS = ("작성 안내", "예시", "선택목록")
+SKIP_SHEET_KEYWORDS = ("안내", "예시", "샘플", "선택목록")
 
 FEE_TABLE = {
     "현장강의": 80000,
