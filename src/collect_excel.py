@@ -22,10 +22,18 @@ def iter_workbooks(input_path):
             yield file_path
 
 
-def should_skip_sheet(sheet_name):
-    if not sheet_name.startswith("강좌"):
+def should_skip_sheet(ws, index):
+    """강좌 시트가 아닌 것만 제외한다. 시트명이 '강좌N'이 아니어도(강사가 과목·이름으로
+    바꿔도) 인식되도록 prefix 요구는 없앴다. 제외 대상:
+    - 첫 시트(작성 안내/표지),
+    - 숨김 시트(선택목록 등 드롭다운 원본),
+    - 이름에 예시/안내/선택목록 등 비강좌 키워드가 든 시트.
+    빈 시트는 여기서 거르지 않고 parse 후 is_empty_lecture가 거른다."""
+    if index == 0:
         return True
-    return any(keyword in sheet_name for keyword in SKIP_SHEET_KEYWORDS)
+    if getattr(ws, "sheet_state", "visible") != "visible":
+        return True
+    return any(keyword in ws.title for keyword in SKIP_SHEET_KEYWORDS)
 
 
 def collect_lectures(input_path):
@@ -50,8 +58,8 @@ def collect_lectures(input_path):
                 )
             )
             continue
-        for ws in wb.worksheets:
-            if should_skip_sheet(ws.title):
+        for index, ws in enumerate(wb.worksheets):
+            if should_skip_sheet(ws, index):
                 continue
             lecture = parse_lecture_sheet(ws, workbook_path.name)
             if is_empty_lecture(lecture):
