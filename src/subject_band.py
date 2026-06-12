@@ -8,7 +8,10 @@ from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.util import Emu, Pt
 
-EMU_PER_CM = 360000.0
+try:
+    from src.units import EMU_PER_CM
+except ModuleNotFoundError:
+    from .units import EMU_PER_CM
 
 # (계열 키워드들, 색상). 위에서부터 먼저 매칭 — '논술'을 '수학'보다 앞에 둬 수리논술을 보라로 분류.
 # 출력물 과목 분류용 — 뮤트 톤으로 차분하게. 단 흰 종이 인쇄 시 가장 안 보이는 노랑(수학)만 덜 연하게.

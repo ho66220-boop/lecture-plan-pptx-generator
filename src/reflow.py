@@ -16,11 +16,10 @@ from pptx.util import Emu
 
 try:
     from src.teacher_photo import is_photo_box
+    from src.units import EMU_PER_CM, EMU_PER_PT
 except ModuleNotFoundError:
     from .teacher_photo import is_photo_box
-
-EMU_PER_PT = 12700.0
-EMU_PER_CM = 360000.0
+    from .units import EMU_PER_CM, EMU_PER_PT
 
 LINE_SLOT = 1.22        # 한 줄이 차지하는 높이(폰트 pt 배수, 실제 렌더 줄높이에 근접). 과대 추정 시 박스가 떠 보임.
 DEFAULT_FONT_PT = 9.0

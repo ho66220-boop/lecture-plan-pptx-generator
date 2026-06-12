@@ -12,7 +12,10 @@ from pathlib import Path
 
 from pptx.oxml.ns import qn
 
-EMU_PER_CM = 360000.0
+try:
+    from src.units import EMU_PER_CM
+except ModuleNotFoundError:
+    from .units import EMU_PER_CM
 PHOTO_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 # 우상단 정사각 사진 박스 식별 기준(reflow·photo 공용 — 한 군데에서만 정의).

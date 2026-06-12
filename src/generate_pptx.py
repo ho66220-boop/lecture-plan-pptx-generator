@@ -14,6 +14,7 @@ try:
     from src.reflow import GLYPH_W_ASCII, GLYPH_W_KO, reflow_slide
     from src.subject_band import add_subject_band
     from src.teacher_photo import apply_teacher_photo
+    from src.units import EMU_PER_CM, EMU_PER_PT
     from src.validate import report_row
 except ModuleNotFoundError:
     from ..config.defaults import HOLIDAY_KEYWORDS
@@ -21,6 +22,7 @@ except ModuleNotFoundError:
     from .reflow import GLYPH_W_ASCII, GLYPH_W_KO, reflow_slide
     from .subject_band import add_subject_band
     from .teacher_photo import apply_teacher_photo
+    from .units import EMU_PER_CM, EMU_PER_PT
     from .validate import report_row
 
 
@@ -28,8 +30,7 @@ PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
 DEFAULT_TEMPLATE_PATH = Path("templates") / "강의계획서_마스터템플릿.pptx"
 
 # ── A4 맞춤(슬라이드는 프레젠테이션당 한 크기 → A4 고정, 넘치면 본문 폰트 축소) ──
-EMU_PER_CM = 360000
-EMU_PER_PT = 12700
+# EMU_PER_CM·EMU_PER_PT는 src/units.py에서 import(단일 진실원). 모든 파생 상수는 int()로 감싸 EMU(정수) 유지.
 A4_BOTTOM_MARGIN = int(0.30 * EMU_PER_CM)   # A4 하단 여유
 FIT_TITLE_GUARD = int(5.0 * EMU_PER_CM)     # 이 위(제목·과목 영역)는 축소 대상에서 제외
 FIT_SCALES = [1.0, 0.95, 0.90, 0.85, 0.80, 0.75, 0.70, 0.65, 0.60, 0.55, 0.50]
