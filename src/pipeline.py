@@ -61,8 +61,16 @@ def run_pipeline(
         reports.extend(pptx_reports)
     validation_report = export_validation_report(reports, output_dir)
 
+    # severity별 건수 요약 — 리포트 파일을 열기 전에 상태를 한눈에 알 수 있게.
+    severity_counts = {key: 0 for key in ("오류", "경고", "확인필요", "정보")}
+    for report in reports:
+        severity = report.get("severity", "")
+        if severity in severity_counts:
+            severity_counts[severity] += 1
+
     return {
         "lecture_count": len(lectures),
+        "report_counts": severity_counts,
         "normalized_xlsx": str(normalized_xlsx),
         "normalized_json": str(normalized_json),
         "validation_report": str(validation_report),

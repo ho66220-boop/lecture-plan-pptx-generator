@@ -62,5 +62,19 @@ def collect_lectures(input_path):
             lecture = parse_lecture_sheet(ws, workbook_path.name)
             if is_empty_lecture(lecture):
                 continue
+            # 필드는 있는데 진도표 헤더를 못 찾은 시트: 헤더가 훼손된 것.
+            # 예전에는 진도표가 조용히 사라져 회차·수강료가 0으로 계산됐다 → 반드시 리포트.
+            if not lecture.get("progress_header_found", True):
+                reports.append(
+                    report_row(
+                        "오류",
+                        lecture,
+                        "진도표",
+                        "PROGRESS_HEADER_NOT_FOUND",
+                        "진도표 헤더 행(회차/날짜/수업 주제/상세 내용/비고)을 찾지 못해 진도표를 읽지 않았습니다.",
+                        raw_value=lecture.get("source_sheet", ""),
+                        suggestion="헤더 5칸이 양식과 같은지 확인해 주세요. 개강일·회차·수강료가 계산되지 않습니다.",
+                    )
+                )
             lectures.append(lecture)
     return lectures, reports

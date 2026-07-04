@@ -4,12 +4,12 @@ from pathlib import Path
 try:
     from config.defaults import HOLIDAY_KEYWORDS, REVIEW_NEEDED_KEYWORDS
     from src.date_utils import extract_start_time_display, format_date_dot, format_period, parse_date, weekday_kr
-    from src.fee import calculate_fee
+    from src.fee import calculate_fee, stable_override_key
     from src.validate import report_row, validate_text_limits
 except ModuleNotFoundError:
     from ..config.defaults import HOLIDAY_KEYWORDS, REVIEW_NEEDED_KEYWORDS
     from .date_utils import extract_start_time_display, format_date_dot, format_period, parse_date, weekday_kr
-    from .fee import calculate_fee
+    from .fee import calculate_fee, stable_override_key
     from .validate import report_row, validate_text_limits
 
 
@@ -95,6 +95,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
         "fields": fields,
         "progress": [],
         "flags": [],
+        "progress_header_found": raw.get("progress_header_found", True),
     }
     reports = []
     real_class_dates = []
@@ -262,6 +263,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
         teacher_name=fields.get("강사명", ""),
         monthly_sessions=monthly_sessions,
         billing=billing,
+        stable_id=stable_override_key(fields.get("강사명", ""), fields.get("강좌명", "")),
     )
     if total_sessions and not fee["fee_display"]:
         reports.append(

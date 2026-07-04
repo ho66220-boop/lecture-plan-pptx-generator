@@ -74,3 +74,16 @@ def test_monthly_with_teacher_override():
     fee = calculate_fee("L010", "현장강의", 8, teacher_name="홍길동", monthly_sessions=4, billing="monthly")
     assert fee["fee_per_session"] == 70000
     assert fee["computed_fee"] == 280000
+
+
+def test_stable_override_key_lookup(monkeypatch):
+    # 안정 키('강사명|강좌명')가 lecture_id보다 우선 조회되는지.
+    from src import fee as fee_mod
+    monkeypatch.setitem(fee_mod.FEE_OVERRIDES, "홍길동|A고국어내신대비반", 320000)
+    result = fee_mod.calculate_fee(
+        "L999_강좌1", "현장강의", 6,
+        teacher_name="홍 길동",   # 공백 변형도 매칭
+        stable_id=fee_mod.stable_override_key("홍 길동", "A고 국어 내신 대비반"),
+    )
+    assert result["computed_fee"] == 320000
+    assert result["billing"] == "override"
