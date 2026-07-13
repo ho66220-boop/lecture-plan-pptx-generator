@@ -124,7 +124,12 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                 year_offset += 1
             prev_month = parsed.month
             if year_offset:
-                parsed = parsed.replace(year=parsed.year + year_offset)
+                try:
+                    parsed = parsed.replace(year=parsed.year + year_offset)
+                except ValueError:
+                    # 윤년 2/29가 보정 후 평년이 되는 경우: 이 행만 날짜 해석 실패로
+                    # 처리하고(아래 DATE_PARSE_FAILED 경로) 강좌·배치는 계속 진행한다.
+                    parsed = None
         # 월별 모드: 이번 달 + 다음 달 행만 처리. 둘 다 아니면 제외.
         # 날짜를 못 읽는 행은 달을 알 수 없어 제외하되 리포트에 남긴다(조용히 버리지 않음).
         is_next = False
@@ -302,9 +307,28 @@ def normalize_lectures(raw_lectures, base_year, academic_calendar_path=None, tar
     reports = list(calendar_reports)   # CSV 읽기 실패(CALENDAR_READ_FAILED)도 리포트에 포함
     # index는 raw 위치 기준(필터와 무관) → lecture_id가 월별 실행에서도 안정적으로 유지된다.
     for index, raw in enumerate(raw_lectures, start=1):
-        lecture, lecture_reports = normalize_lecture(
-            raw, index, base_year, calendar_events, target_month
-        )
+        # 강좌 1건의 예상 밖 예외가 배치 전체(수십 강좌)를 죽이지 않게 강좌 단위로 격리.
+        # 실패한 강좌는 리포트에 "누가 왜"를 남기고 건너뛴다(다른 강좌는 정상 산출).
+        try:
+            lecture, lecture_reports = normalize_lecture(
+                raw, index, base_year, calendar_events, target_month
+            )
+        except Exception as exc:
+            reports.append(
+                report_row(
+                    "오류",
+                    {
+                        "lecture_id": f"L{index:03d}_{raw.get('source_sheet', '')}",
+                        "source_file": raw.get("source_file", ""),
+                        "source_sheet": raw.get("source_sheet", ""),
+                    },
+                    "정규화",
+                    "LECTURE_NORMALIZE_FAILED",
+                    f"강좌 정규화 중 예상 밖 오류로 이 강좌만 건너뛰었습니다: {type(exc).__name__}: {exc}",
+                    suggestion="해당 시트의 입력값(날짜·필드)을 확인해 주세요. 다른 강좌는 정상 처리되었습니다.",
+                )
+            )
+            continue
         reports.extend(lecture_reports)
         if lecture is not None:   # 월별 모드: 그 달 0회 정규반만 None → 슬라이드 제외(특강은 항상 포함)
             normalized.append(lecture)

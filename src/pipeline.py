@@ -49,17 +49,23 @@ def run_pipeline(
 
     normalized_xlsx, normalized_json = export_normalized_data(lectures, output_dir)
     pptx_path = None
-    if make_pptx and lectures:
-        pptx_path, pptx_reports = generate_pptx(
-            lectures,
-            output_dir,
-            template_path=template_path,
-            teacher_photo_dir=teacher_photo_dir,
-            target_month=target_month,
-            base_year=base_year,
-        )
-        reports.extend(pptx_reports)
-    validation_report = export_validation_report(reports, output_dir)
+    # PPTX 단계가 예외로 중단돼도(예: 템플릿 손상 → 의도된 즉시 실패) 그때까지 수집한
+    # 리포트를 반드시 파일로 남긴다 — 실패 원인을 알려줄 validation_report가 실패 때문에
+    # 소실되는 것을 방지. 단순히 저장을 앞으로 옮기면 PPTX 단계 리포트(사진 누락·A4 초과
+    # 등)가 빠지므로 finally로 처리한다(정상 경로에서는 pptx_reports 포함 후 저장됨).
+    try:
+        if make_pptx and lectures:
+            pptx_path, pptx_reports = generate_pptx(
+                lectures,
+                output_dir,
+                template_path=template_path,
+                teacher_photo_dir=teacher_photo_dir,
+                target_month=target_month,
+                base_year=base_year,
+            )
+            reports.extend(pptx_reports)
+    finally:
+        validation_report = export_validation_report(reports, output_dir)
 
     # severity별 건수 요약 — 리포트 파일을 열기 전에 상태를 한눈에 알 수 있게.
     severity_counts = {key: 0 for key in ("오류", "경고", "확인필요", "정보")}

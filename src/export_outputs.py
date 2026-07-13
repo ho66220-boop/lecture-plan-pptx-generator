@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -50,6 +51,26 @@ NORMALIZED_COLUMNS = [
 ]
 
 
+def _save_workbook_with_fallback(wb, path, label):
+    """산출 엑셀 저장. 파일이 엑셀에서 열려 있어 잠기면(PermissionError 등) 타임스탬프
+    대체명으로 1회 재시도해 배치 결과를 최대한 파일로 남긴다(특히 validation_report는
+    실패 원인을 알려줄 최후의 보루라 반드시 저장 시도). 그마저 실패하면 스택트레이스
+    대신 원인·조치를 담은 RuntimeError로 명확히 실패한다."""
+    try:
+        wb.save(path)
+        return path
+    except Exception:
+        alt = path.with_name(f"{path.stem}_재시도{datetime.now().strftime('%H%M%S')}{path.suffix}")
+        try:
+            wb.save(alt)
+            return alt
+        except Exception as exc:
+            raise RuntimeError(
+                f"{label} 파일을 저장할 수 없습니다: {path} ({type(exc).__name__}). "
+                "산출 파일이 엑셀에서 열려 있는지 확인하고, 닫은 뒤 다시 실행해 주세요."
+            ) from exc
+
+
 def style_sheet(ws):
     header_fill = PatternFill("solid", fgColor="EFEFEF")
     for cell in ws[1]:
@@ -92,8 +113,9 @@ def export_normalized_data(lectures, output_dir):
                 row.append(lecture.get(column, ""))
         ws.append(row)
     style_sheet(ws)
-    xlsx_path = output / "normalized_data.xlsx"
-    wb.save(xlsx_path)
+    xlsx_path = _save_workbook_with_fallback(
+        wb, output / "normalized_data.xlsx", "정규화 데이터"
+    )
     return xlsx_path, json_path
 
 
@@ -107,6 +129,7 @@ def export_validation_report(reports, output_dir):
     for item in reports:
         ws.append([item.get(column, "") for column in REPORT_COLUMNS])
     style_sheet(ws)
-    path = output / "validation_report.xlsx"
-    wb.save(path)
+    path = _save_workbook_with_fallback(
+        wb, output / "validation_report.xlsx", "검증 리포트"
+    )
     return path

@@ -567,85 +567,129 @@ def generate_pptx_from_template(
     target_bottom = prs.slide_height - A4_BOTTOM_MARGIN
 
     for lecture in lectures:
-        reports.extend(validate_required_values(lecture))
-        reports.extend(validate_progress_overflow(lecture))
-        slide = clone_template_slide(prs, template_slide)
-        progress_rows = lecture.get("progress", [])
-        gray_keys = next_month_progress_keys(progress_rows)   # 다음 달 미리보기 → 회색
-        replace_placeholders_in_slide(slide, build_placeholder_map(lecture), gray_keys)
-        left_count, right_count = progress_split(len(progress_rows))
-        balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
-        fit_oneline_badges(slide)
-        fit_title(slide)
-        fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
-        if not fitted:
-            reports.append(
-                report_row(
-                    "확인필요",
-                    lecture,
-                    "PPTX",
-                    "A4_OVERFLOW",
-                    "강의특징/관리 본문 폰트를 가독성 하한까지 줄여도 A4 한 장에 안 들어갑니다. "
-                    "코드가 더 줄이지 않으니(가독성 우선), 강사 분량을 줄여야 합니다.",
-                    raw_value=f"scale={fit_scale}, prose_floor_cfg={PROSE_MIN_PT:.0f}pt",
-                    suggestion="강의특징/관리 프로그램 문구를 줄여 주세요(이번 한 장 분량 초과).",
-                )
-            )
-        teacher_name = lecture.get("fields", {}).get("강사명", "")
-        # 사진 삽입 실패(깨진/0바이트 이미지 등)는 그 강좌만 회색 박스로 두고 계속 — 전체 중단 방지.
-        photo_error = None
+        # 강좌 1건의 예상 밖 예외가 배치 전체를 죽이지 않게 슬라이드 단위로 격리.
+        # 실패 시 반쯤 만들어진 슬라이드는 제거하고 리포트에 "누가 왜"를 남긴 뒤 계속.
+        # (사진 삽입은 아래 내부 try가 더 세분화된 기존 격리를 유지한다.)
+        slide = None
         try:
-            inserted_photo = apply_teacher_photo(slide, teacher_name, teacher_photo_dir)
+            reports.extend(validate_required_values(lecture))
+            reports.extend(validate_progress_overflow(lecture))
+            slide = clone_template_slide(prs, template_slide)
+            progress_rows = lecture.get("progress", [])
+            gray_keys = next_month_progress_keys(progress_rows)   # 다음 달 미리보기 → 회색
+            replace_placeholders_in_slide(slide, build_placeholder_map(lecture), gray_keys)
+            left_count, right_count = progress_split(len(progress_rows))
+            balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
+            fit_oneline_badges(slide)
+            fit_title(slide)
+            fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
+            if not fitted:
+                reports.append(
+                    report_row(
+                        "확인필요",
+                        lecture,
+                        "PPTX",
+                        "A4_OVERFLOW",
+                        "강의특징/관리 본문 폰트를 가독성 하한까지 줄여도 A4 한 장에 안 들어갑니다. "
+                        "코드가 더 줄이지 않으니(가독성 우선), 강사 분량을 줄여야 합니다.",
+                        raw_value=f"scale={fit_scale}, prose_floor_cfg={PROSE_MIN_PT:.0f}pt",
+                        suggestion="강의특징/관리 프로그램 문구를 줄여 주세요(이번 한 장 분량 초과).",
+                    )
+                )
+            teacher_name = lecture.get("fields", {}).get("강사명", "")
+            # 사진 삽입 실패(깨진/0바이트 이미지 등)는 그 강좌만 회색 박스로 두고 계속 — 전체 중단 방지.
+            photo_error = None
+            try:
+                inserted_photo = apply_teacher_photo(slide, teacher_name, teacher_photo_dir)
+            except Exception as exc:
+                inserted_photo = None
+                photo_error = exc
+            if teacher_photo_dir and not inserted_photo and photo_error is not None:
+                reports.append(
+                    report_row(
+                        "확인필요",
+                        lecture,
+                        "강사 사진",
+                        "TEACHER_PHOTO_INSERT_FAILED",
+                        f"'{teacher_name}' 사진을 슬라이드에 삽입하지 못해 회색 박스로 둡니다: {type(photo_error).__name__}",
+                        suggestion="사진 파일이 손상되었거나 0바이트인지 확인해 주세요.",
+                    )
+                )
+            elif teacher_photo_dir and not inserted_photo:
+                reports.append(
+                    report_row(
+                        "확인필요",
+                        lecture,
+                        "강사 사진",
+                        "TEACHER_PHOTO_NOT_FOUND",
+                        f"'{teacher_name}' 강사 사진을 찾지 못해 회색 박스로 둡니다.",
+                        suggestion=f"{teacher_photo_dir}/{teacher_name}.jpg 형태로 파일을 넣어 주세요.",
+                    )
+                )
+            remaining = unresolved_placeholders(slide)
+            for placeholder in remaining:
+                reports.append(
+                    report_row(
+                        "경고",
+                        lecture,
+                        "PPTX",
+                        "UNRESOLVED_PLACEHOLDER",
+                        f"치환되지 않은 placeholder가 남아 있습니다: {placeholder}",
+                        raw_value=placeholder,
+                        suggestion="placeholder_map 또는 템플릿 placeholder명을 확인해 주세요.",
+                    )
+                )
+            generated_slides.append(slide)
+            # 배지와 동일하게 정규화한 과목으로 색 테두리 매칭(미적분·확통·기하 등 세부과목 → '수학').
+            slide_subjects.append(normalize_subject(lecture.get("fields", {}).get("과목", "")))
         except Exception as exc:
-            inserted_photo = None
-            photo_error = exc
-        if teacher_photo_dir and not inserted_photo and photo_error is not None:
+            if slide is not None:
+                remove_slide(prs, slide)   # 반쯤 만들어진 슬라이드가 산출물에 남지 않게 제거
             reports.append(
                 report_row(
-                    "확인필요",
-                    lecture,
-                    "강사 사진",
-                    "TEACHER_PHOTO_INSERT_FAILED",
-                    f"'{teacher_name}' 사진을 슬라이드에 삽입하지 못해 회색 박스로 둡니다: {type(photo_error).__name__}",
-                    suggestion="사진 파일이 손상되었거나 0바이트인지 확인해 주세요.",
-                )
-            )
-        elif teacher_photo_dir and not inserted_photo:
-            reports.append(
-                report_row(
-                    "확인필요",
-                    lecture,
-                    "강사 사진",
-                    "TEACHER_PHOTO_NOT_FOUND",
-                    f"'{teacher_name}' 강사 사진을 찾지 못해 회색 박스로 둡니다.",
-                    suggestion=f"{teacher_photo_dir}/{teacher_name}.jpg 형태로 파일을 넣어 주세요.",
-                )
-            )
-        remaining = unresolved_placeholders(slide)
-        for placeholder in remaining:
-            reports.append(
-                report_row(
-                    "경고",
+                    "오류",
                     lecture,
                     "PPTX",
-                    "UNRESOLVED_PLACEHOLDER",
-                    f"치환되지 않은 placeholder가 남아 있습니다: {placeholder}",
-                    raw_value=placeholder,
-                    suggestion="placeholder_map 또는 템플릿 placeholder명을 확인해 주세요.",
+                    "PPTX_GENERATION_FAILED",
+                    f"슬라이드 생성 중 예상 밖 오류로 이 강좌만 건너뛰었습니다: {type(exc).__name__}: {exc}",
+                    suggestion="해당 강좌 입력값을 확인해 주세요. 다른 강좌 슬라이드는 정상 생성되었습니다.",
                 )
             )
-        generated_slides.append(slide)
-        # 배지와 동일하게 정규화한 과목으로 색 테두리 매칭(미적분·확통·기하 등 세부과목 → '수학').
-        slide_subjects.append(normalize_subject(lecture.get("fields", {}).get("과목", "")))
 
     remove_slide(prs, template_slide)
     # 슬라이드 높이는 A4(템플릿 그대로) 유지 — fit_slide_to_height가 내용을 A4 안에 맞춰 둠.
     # 최종 슬라이드 크기가 정해진 뒤 과목 색 테두리를 두른다(테두리가 전체 면적을 감싸야 하므로).
     for slide, subject in zip(generated_slides, slide_subjects):
         add_subject_band(slide, subject, prs.slide_width, prs.slide_height)
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    prs.save(output_path)
-    return Path(output_path), reports
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # 산출 PPTX가 PowerPoint에서 열려 있으면 저장이 막힌다. 대체명으로 1회 재시도하고,
+    # 그래도 실패하면 크래시 대신 OUTPUT_SAVE_FAILED 리포트를 남기고 계속한다
+    # (리포트·정규화 산출물은 유지 — 사용자는 리포트를 보고 파일을 닫고 재실행하면 됨).
+    try:
+        prs.save(output_path)
+    except Exception:
+        alt = output_path.with_name(
+            f"{output_path.stem}_재시도{datetime.now().strftime('%H%M%S')}{output_path.suffix}"
+        )
+        try:
+            prs.save(alt)
+            output_path = alt
+        except Exception as exc:
+            reports.append(
+                report_row(
+                    "오류",
+                    {},
+                    "PPTX",
+                    "OUTPUT_SAVE_FAILED",
+                    f"PPTX 파일을 저장하지 못했습니다: {type(exc).__name__}. "
+                    "같은 이름의 산출 파일이 PowerPoint에서 열려 있는지 확인해 주세요.",
+                    raw_value=str(output_path),
+                    suggestion="열려 있는 산출 PPTX를 닫고 다시 실행해 주세요.",
+                )
+            )
+            return None, reports
+    return output_path, reports
 
 
 def generate_pptx(lectures, output_dir, template_path=None, teacher_photo_dir=None,
