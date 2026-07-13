@@ -119,10 +119,55 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
     for row_idx, row in enumerate(raw.get("progress", []), start=1):
         parsed, claimed_weekday = parse_date(row.get("날짜"), base_year=base_year)
+
+        # 내용은 있는데 날짜만 빈 행(셀 병합으로 값이 소거된 경우 등)은 회차에서
+        # 빠져 수강료가 입력 의도와 달라진다 — 조용히 넘기지 않고 리포트로 드러낸다.
+        # 회차 산정 정책은 불변(날짜 없는 행 제외 유지): 리포트를 보고 사람이 입력을
+        # 고쳐 재실행하는 것이 올바른 흐름. 완전 빈 행(내용도 없음)은 기존대로 무시.
+        date_raw = str(row.get("날짜") or "").strip()
+        if not date_raw and any(
+            str(row.get(key) or "").strip() for key in ("회차", "수업 주제", "상세 내용", "비고")
+        ):
+            reports.append(
+                report_row(
+                    "오류",
+                    lecture,
+                    "진도표 날짜",
+                    "PROGRESS_DATE_MISSING",
+                    f"진도표 {row_idx}행에 내용은 있는데 날짜가 비어 있어 회차에 포함하지 못했습니다"
+                    "(셀 병합 시 첫 행에만 값이 남습니다).",
+                    raw_value=row_text(row),
+                    suggestion="행마다 날짜를 개별 입력한 뒤 재실행해 주세요. 회차·수강료에 반영됩니다.",
+                )
+            )
+
         if parsed is not None:
             if prev_month is not None and parsed.month < prev_month:
-                year_offset += 1
-            prev_month = parsed.month
+                # 월 감소 중 진짜 연도 경계로 보는 것은 12→1(인접 wrap, 순방향 거리 1)뿐.
+                # 그 외 역행(7월 진도 사이의 6월 보강행, 11→1 등)은 연도 경계인지 알 수
+                # 없으므로 값을 조용히 고치지 않는다 — base_year(+기존 offset)를 유지한 채
+                # 회차에 포함하고(보강행은 실제 수업) OUT_OF_ORDER_DATE로 사람이 확인.
+                if (parsed.month - prev_month) % 12 == 1:
+                    year_offset += 1
+                    prev_month = parsed.month
+                else:
+                    reports.append(
+                        report_row(
+                            "확인필요",
+                            lecture,
+                            "진도표 날짜",
+                            "OUT_OF_ORDER_DATE",
+                            f"진도표 {row_idx}행 날짜({date_raw})가 앞 행보다 이전 달입니다. "
+                            "보강·순서 어긋남이면 그대로 두어도 되지만, 연도가 바뀐 것이라면 날짜를 확인해 주세요.",
+                            raw_value=date_raw,
+                            computed_value=parsed.isoformat() if not year_offset else "",
+                            suggestion="진도표를 날짜순으로 정렬하거나, 해를 넘긴 날짜면 연도를 명시(예: 2027-01-04)해 주세요.",
+                        )
+                    )
+                    # prev_month는 갱신하지 않는다 — 주 흐름(직전까지의 진행 월)을 기준으로
+                    # 유지해, 역행 행 하나가 이후 행들의 연도 판정을 오염시키지 않게 한다.
+            else:
+                prev_month = parsed.month
             if year_offset:
                 try:
                     parsed = parsed.replace(year=parsed.year + year_offset)

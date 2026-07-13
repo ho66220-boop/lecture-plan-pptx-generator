@@ -70,10 +70,13 @@ def read_issue_codes(validation_xlsx):
 
 def test_leap_rollover_row_guarded_batch_survives():
     """# P2-2 회귀 방지 (행 단위 replace 가드)
-    base_year 윤년(2028) + 진도 12/20→2/29: 롤오버로 2/29가 평년(2029)이 되며
-    현재는 ValueError로 배치 전체가 죽는다. 기대: 예외 없이 두 강좌 모두 산출되고,
-    2/29 행만 DATE_PARSE_FAILED로 리포트된다(강좌는 생존)."""
-    crash = make_raw(["12/20", "2/29"], course="윤년크래시", sheet="강좌1")
+    base_year 윤년(2028) + 진도 12/20→1/10→2/29: 12→1 wrap으로 연도가 +1된 뒤
+    2/29가 평년(2029)으로 보정되며 replace에서 ValueError가 난다(가드 없으면
+    배치 전체가 죽음). 기대: 예외 없이 두 강좌 모두 산출되고, 2/29 행만
+    DATE_PARSE_FAILED로 리포트된다(강좌는 생존).
+    (Batch 2에서 롤오버 판별이 '12→1 인접 wrap만'으로 좁혀져, 구 픽스처
+    12/20→2/29는 wrap이 아닌 OUT_OF_ORDER가 되므로 wrap 경유 경로로 갱신함.)"""
+    crash = make_raw(["12/20", "1/10", "2/29"], course="윤년크래시", sheet="강좌1")
     normal = make_raw(["12/21", "12/28"], course="정상강좌", sheet="강좌2")
     lectures, reports = normalize_lectures([crash, normal], 2028)   # 예외 전파 시 여기서 실패
 
