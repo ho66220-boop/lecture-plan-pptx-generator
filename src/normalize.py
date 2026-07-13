@@ -79,6 +79,25 @@ def _in_target_month(parsed, year, month):
     return parsed is not None and parsed.year == year and parsed.month == month
 
 
+def _date_parse_failed_report(lecture, row_idx, raw_value, excluded_month=None):
+    """진도 날짜 해석 실패 리포트(월별 제외 분기/본류 공용 — 문구는 기존 그대로)."""
+    if excluded_month is not None:
+        message = f"진도표 {row_idx}행 날짜를 해석하지 못해 {excluded_month}월 계획서에서 제외했습니다."
+        suggestion = "예: 7/20(월), 2026-07-20 형식으로 입력해 주세요."
+    else:
+        message = f"진도표 {row_idx}행 날짜를 해석하지 못했습니다."
+        suggestion = "예: 5/4(월), 2026-05-04 형식으로 입력해 주세요."
+    return report_row(
+        "오류",
+        lecture,
+        "진도표 날짜",
+        "DATE_PARSE_FAILED",
+        message,
+        raw_value=raw_value,
+        suggestion=suggestion,
+    )
+
+
 def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=None):
     """target_month(int, 예: 7)가 주어지면 '월별 계획서' 모드:
     정규반은 진도를 그 달(base_year+target_month)만 잘라 회차·기간·수강료를 재계산한다.
@@ -89,7 +108,6 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
     lecture_id = f"L{index:03d}_{raw.get('source_sheet', '')}"
     lecture = {
         "lecture_id": lecture_id,
-        "template_type": "내신_TYPE2",
         "source_file": raw.get("source_file", ""),
         "source_sheet": raw.get("source_sheet", ""),
         "fields": fields,
@@ -199,14 +217,8 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
             if not (in_this or is_next):
                 if row.get("날짜") and not parsed:
                     reports.append(
-                        report_row(
-                            "오류",
-                            lecture,
-                            "진도표 날짜",
-                            "DATE_PARSE_FAILED",
-                            f"진도표 {row_idx}행 날짜를 해석하지 못해 {slice_month}월 계획서에서 제외했습니다.",
-                            raw_value=row.get("날짜", ""),
-                            suggestion="예: 7/20(월), 2026-07-20 형식으로 입력해 주세요.",
+                        _date_parse_failed_report(
+                            lecture, row_idx, row.get("날짜", ""), excluded_month=slice_month
                         )
                     )
                 continue
@@ -218,17 +230,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
         row["is_next_month"] = is_next   # 다음 달 미리보기 행(표시용 — 회차/수강료 누적 제외)
 
         if row.get("날짜") and not parsed:
-            reports.append(
-                report_row(
-                    "오류",
-                    lecture,
-                    "진도표 날짜",
-                    "DATE_PARSE_FAILED",
-                    f"진도표 {row_idx}행 날짜를 해석하지 못했습니다.",
-                    raw_value=row.get("날짜", ""),
-                    suggestion="예: 5/4(월), 2026-05-04 형식으로 입력해 주세요.",
-                )
-            )
+            reports.append(_date_parse_failed_report(lecture, row_idx, row.get("날짜", "")))
 
         if parsed and claimed_weekday and claimed_weekday != row["computed_weekday"]:
             row["weekday_mismatch_flag"] = True

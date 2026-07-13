@@ -16,7 +16,6 @@ NORMALIZED_COLUMNS = [
     "source_file",
     "source_sheet",
     "lecture_id",
-    "template_type",
     "강좌 유형",
     "학년",
     "과목",

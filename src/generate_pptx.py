@@ -573,6 +573,8 @@ def generate_pptx_from_template(
         ) from exc
     if not prs.slides:
         raise ValueError("Template PPTX has no slides.")
+    if not prs.slide_layouts:   # 복제(clone_template_slide)가 레이아웃 0번을 쓰므로 선검사
+        raise ValueError("Template PPTX has no slide layouts.")
 
     template_slide = prs.slides[0]
     # 세로 중앙 정렬을 적용할 placeholder 값 박스 id(치환 전 템플릿 기준; 복제해도 id 유지).
@@ -670,8 +672,10 @@ def generate_pptx_from_template(
                         lecture,
                         "강사 사진",
                         "TEACHER_PHOTO_NOT_FOUND",
-                        f"'{teacher_name}' 강사 사진을 찾지 못해 회색 박스로 둡니다.",
-                        suggestion=f"{teacher_photo_dir}/{teacher_name}.jpg 형태로 파일을 넣어 주세요.",
+                        f"'{teacher_name}' 강사 사진을 넣지 못해 회색 박스로 둡니다"
+                        "(사진 파일이 없거나, 템플릿의 우상단 사진박스가 기준 위치를 벗어나 미식별됐을 수 있습니다).",
+                        suggestion=f"{teacher_photo_dir}/{teacher_name}.jpg 형태로 파일을 넣고, 파일이 이미 있다면 "
+                        "템플릿 사진박스 위치(우상단 정사각)를 확인해 주세요.",
                     )
                 )
             generated_slides.append(slide)
@@ -732,7 +736,8 @@ def generate_pptx(lectures, output_dir, template_path=None, teacher_photo_dir=No
     output = Path(output_dir) / "generated_pptx"
     output.mkdir(parents=True, exist_ok=True)
     template = Path(template_path or DEFAULT_TEMPLATE_PATH)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    # 초 단위 타임스탬프 — 같은 분(minute) 안에 재실행해도 이전 산출을 조용히 덮어쓰지 않게.
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     # 월별 계획서는 파일명에 대상 연·월을 넣어 7월/8월이 서로 덮어쓰지 않게 한다.
     month_tag = f"{base_year}_{target_month:02d}_" if target_month else ""
     output_path = output / f"강의계획서_초안_{month_tag}{timestamp}.pptx"
