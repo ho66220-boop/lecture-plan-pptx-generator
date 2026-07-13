@@ -102,6 +102,21 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
     # 정규/특강 판별(청구 + 월별 필터 공유).
     is_regular, billing = classify_billing(fields)
+    # 구분·시즌이 모두 비어 판별 근거가 0이면 monthly로 가정된다 — 특강인데 표기를
+    # 누락하면 총액이 아닌 월 단위로 오청구될 수 있으므로 조용히 가정하지 않고 리포트.
+    # (classify_billing의 반환값·계산은 불변. 회차 0이어도 발동 — 입력 완결성 신호라
+    #  한 번의 실행에서 모든 수정 지점이 보이게 한다.)
+    if not str(fields.get("구분") or "").strip() and not str(fields.get("시즌") or "").strip():
+        reports.append(
+            report_row(
+                "확인필요",
+                lecture,
+                "구분/시즌",
+                "BILLING_UNDETERMINED",
+                "구분·시즌이 모두 비어 정규/특강 판별 근거가 없습니다. 월 단위(monthly) 청구로 가정했습니다.",
+                suggestion="특강·썸머·윈터 강좌라면 구분 또는 시즌을 입력해 주세요(강좌 전체 합계로 청구 계산됩니다).",
+            )
+        )
     # 월별 모드라도 특강은 패키지 단위(썸머특강 등)라 월로 쪼개지 않고 전체 기간 그대로 넣는다.
     # → 엑셀에 있으면 어느 달 계획서를 뽑든 항상 포함. 정규반만 그 달로 슬라이싱한다.
     slice_month = target_month if (target_month is not None and is_regular) else None

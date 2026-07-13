@@ -1,4 +1,5 @@
 import copy
+import math
 import re
 from datetime import date, datetime
 from pathlib import Path
@@ -114,7 +115,12 @@ def fit_oneline_badges(slide):
 
 def fit_title(slide):
     """큰 제목(강좌명) 글상자: 박스 높이(2.5cm)가 최대 2줄을 담으므로, 2줄 안에 들어가면
-    폰트를 그대로 두고(큰 글씨 유지), 2줄로도 부족할 만큼 길면 그때만 폰트를 줄인다."""
+    폰트를 그대로 두고(큰 글씨 유지), 2줄로도 부족할 만큼 길면 그때만 폰트를 줄인다.
+
+    반환: 폰트 하한(TITLE_FONT_FLOOR)으로도 허용 줄 수(TITLE_MAX_LINES)를 초과하는
+    제목 정보 목록 [(적용 pt, 추정 줄 수)] — 아래와 겹칠 가능성이 있어 호출부가
+    TITLE_OVERFLOW로 리포트한다(폰트 축소 동작 자체는 기존과 동일)."""
+    overflows = []
     for shape in slide.shapes:
         if shape.top is None or shape.top >= BADGE_FIT_TOP:
             continue
@@ -145,6 +151,12 @@ def fit_title(slide):
         for run in runs:
             if run.font.size is not None:
                 run.font.size = Pt(new_pt)
+        # 하한에 걸렸는데도(max_font < floor) 줄 수가 넘치면 겹침 가능성 신호.
+        # 줄 수 추정은 위와 동일한 폭 기반 산식(글자폭 스케일 역산)을 재사용한다.
+        if max_font < TITLE_FONT_FLOOR:
+            est_lines = math.ceil(widest * (new_pt / base) / inner_pt)
+            overflows.append((new_pt, est_lines))
+    return overflows
 
 
 def _is_prose_shape(shape):
@@ -478,11 +490,20 @@ def collect_texts_from_slide(slide):
     return texts
 
 
-def unresolved_placeholders(slide):
-    found = []
-    for text in collect_texts_from_slide(slide):
-        found.extend(match.group(0) for match in PLACEHOLDER_RE.finditer(text or ""))
-    return sorted(set(found))
+def unmapped_template_keys(template_slide):
+    """템플릿의 {{키}} 중 치환 map에 없는 키 집합(치환 전 1회 대조).
+
+    치환기는 미지의 키를 조용히 ""로 바꾸므로 '치환 후 남은 placeholder'를 찾는
+    방식은 아무것도 못 잡는다(감사 P2-3에서 죽은 코드로 실증된 구 unresolved 방식).
+    map에 키가 있고 값이 빈 문자열인 경우는 의도된 빈칸(결측 필드)이라 대상이 아니다 —
+    '키 자체가 map에 없음'만 템플릿↔코드 계약 위반으로 본다.
+    """
+    template_keys = set()
+    for text in collect_texts_from_slide(template_slide):
+        template_keys.update(m.group(1).strip() for m in PLACEHOLDER_RE.finditer(text or ""))
+    # map의 키 집합은 강좌 데이터와 무관하게 항상 동일하다(고정 dict + 진도 슬롯 전체 생성).
+    mapped_keys = set(build_placeholder_map({"fields": {}, "progress": []}))
+    return sorted(template_keys - mapped_keys)
 
 
 def validate_required_values(lecture):
@@ -561,6 +582,21 @@ def generate_pptx_from_template(
         if getattr(shape, "has_text_frame", False) and "{{" in shape.text_frame.text
     }
     reports = []
+    # 템플릿 placeholder ↔ 치환 map 계약 검사(치환 전, 실행당 키당 1회).
+    # 특정 강좌의 문제가 아니라 템플릿 오타·개명·신규 미매핑의 문제라 lecture 없이
+    # 템플릿 파일명으로 리포트한다(강좌 100개면 100번이 아니라 키당 1번).
+    for key in unmapped_template_keys(template_slide):
+        reports.append(
+            report_row(
+                "확인필요",
+                {"source_file": Path(template_path).name},
+                "PPTX 템플릿",
+                "UNMAPPED_PLACEHOLDER",
+                f"템플릿의 {{{{{key}}}}} placeholder가 치환 map에 없어 모든 슬라이드에서 빈칸이 됩니다.",
+                raw_value=f"{{{{{key}}}}}",
+                suggestion="템플릿 placeholder명 오타·개명 여부 또는 build_placeholder_map 키를 확인해 주세요.",
+            )
+        )
     generated_slides = []
     slide_subjects = []
     # 슬라이드는 프레젠테이션당 한 크기만 가능 → A4(템플릿 높이) 고정. 넘치는 슬라이드는 본문 폰트를 줄여 맞춘다.
@@ -581,7 +617,19 @@ def generate_pptx_from_template(
             left_count, right_count = progress_split(len(progress_rows))
             balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
             fit_oneline_badges(slide)
-            fit_title(slide)
+            for title_pt, title_lines in fit_title(slide):
+                reports.append(
+                    report_row(
+                        "확인필요",
+                        lecture,
+                        "메인 제목",
+                        "TITLE_OVERFLOW",
+                        f"제목이 폰트 하한({title_pt:.0f}pt)에서도 약 {title_lines}줄로 허용({TITLE_MAX_LINES}줄)을 "
+                        "초과합니다. 아래 요소와 겹칠 수 있으니 검수 시 이 슬라이드를 먼저 확인해 주세요.",
+                        raw_value=lecture.get("fields", {}).get("강좌명", ""),
+                        suggestion="강좌명을 줄이거나 PPTX에서 제목 배치를 수동 조정해 주세요.",
+                    )
+                )
             fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
             if not fitted:
                 reports.append(
@@ -624,19 +672,6 @@ def generate_pptx_from_template(
                         "TEACHER_PHOTO_NOT_FOUND",
                         f"'{teacher_name}' 강사 사진을 찾지 못해 회색 박스로 둡니다.",
                         suggestion=f"{teacher_photo_dir}/{teacher_name}.jpg 형태로 파일을 넣어 주세요.",
-                    )
-                )
-            remaining = unresolved_placeholders(slide)
-            for placeholder in remaining:
-                reports.append(
-                    report_row(
-                        "경고",
-                        lecture,
-                        "PPTX",
-                        "UNRESOLVED_PLACEHOLDER",
-                        f"치환되지 않은 placeholder가 남아 있습니다: {placeholder}",
-                        raw_value=placeholder,
-                        suggestion="placeholder_map 또는 템플릿 placeholder명을 확인해 주세요.",
                     )
                 )
             generated_slides.append(slide)
