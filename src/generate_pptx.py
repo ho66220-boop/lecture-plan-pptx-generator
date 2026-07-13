@@ -577,7 +577,10 @@ def generate_pptx_from_template(
         raise ValueError("Template PPTX has no slide layouts.")
 
     template_slide = prs.slides[0]
-    # 세로 중앙 정렬을 적용할 placeholder 값 박스 id(치환 전 템플릿 기준; 복제해도 id 유지).
+    # [순서 계약] 세로 중앙 정렬을 적용할 placeholder 값 박스 id. 반드시 치환 "전"
+    # 템플릿에서 캡처해야 한다 — 치환이 "{{"를 지우므로 치환 뒤에는 이 조건으로 값 박스를
+    # 식별할 수 없다(순서를 바꾸면 content_ids가 비어 A4 fit의 중앙 정렬이 조용히 꺼진다).
+    # 복제 슬라이드에도 shape_id가 유지되므로 한 번만 캡처해 전 강좌에 재사용한다.
     content_ids = {
         shape.shape_id
         for shape in template_slide.shapes
@@ -616,8 +619,16 @@ def generate_pptx_from_template(
             progress_rows = lecture.get("progress", [])
             gray_keys = next_month_progress_keys(progress_rows)   # 다음 달 미리보기 → 회색
             replace_placeholders_in_slide(slide, build_placeholder_map(lecture), gray_keys)
+            # [불변식 공유] 이 progress_split은 build_placeholder_map(내부 _progress_slots)이
+            # 좌우 슬롯에 값을 채울 때 쓴 것과 동일한 분배 계산이다. 두 호출이 같은 값을 내야
+            # "값을 채운 칸"과 "남겨 둔 칸"이 일치한다 — 한쪽만 바꾸면 빈 칸 또는 유령 값이
+            # 리포트 없이 생긴다(분배 규칙 변경 시 두 사용처를 함께 검토할 것).
             left_count, right_count = progress_split(len(progress_rows))
             balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
+            # [순서 고정] badges → title → A4 fit. 배지·제목 폰트를 먼저 확정해야
+            # fit_slide_to_height의 스냅샷(_snapshot_layout)이 그 상태를 기준으로 잡고
+            # 본문만 차등 축소한다 — 순서를 바꾸면 스냅샷/복원 기준이 틀어져 레이아웃이
+            # 조용히 어긋난다(시각 회귀라 pytest로는 잡히지 않음).
             fit_oneline_badges(slide)
             for title_pt, title_lines in fit_title(slide):
                 reports.append(
