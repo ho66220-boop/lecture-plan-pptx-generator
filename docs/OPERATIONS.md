@@ -15,7 +15,7 @@
 **동기 후 스모크(매번):** 배포 사본 폴더에서 ① 변경 모듈 import, ② 미니 입력 1건 실행, ③ `config` 분기 유지 diff — 셋 다 통과해야 완료.
 [운영자 확인 필요] 드라이브 업로드 방식(폴더 통째 교체 vs src만 갈아끼움)은 운영자 관행에 따름.
 
-## 2. issue_code 카탈로그 (전 23종 — 코드에서 추출)
+## 2. issue_code 카탈로그 (전 33종 — 코드에서 추출)
 
 severity 우선순위: **오류**(산출 누락/실패 — 반드시 처리) > **확인필요**(사람 판단) > **경고**(참고) > **정보**.
 
@@ -30,6 +30,8 @@ severity 우선순위: **오류**(산출 누락/실패 — 반드시 처리) > *
 | `OUTPUT_SAVE_FAILED` | 오류 | PPTX 저장이 기본명·대체명 모두 실패(파일 잠금 등) | 열려 있는 산출 파일 닫고 재실행 |
 | `BILLING_UNDETERMINED` | 확인필요 | 구분·시즌 모두 공백 → 월 단위 청구로 가정됨 | 특강이면 구분/시즌 입력(전체 합계 청구) |
 | `OUT_OF_ORDER_DATE` | 확인필요 | 진도 날짜가 앞 행보다 이전 달(12→1 연도 경계 제외) — 값은 그대로 | 보강이면 무시 가능, 해 넘김이면 연도 명시 |
+| `HOLIDAY_FIELD_CONFLICT` | 확인필요 | 휴강일 칸의 날짜가 진도표에서 정상 수업으로 계산됐거나, 진도표 휴강 행이 휴강일 칸에 없음 — 값은 그대로 | 휴강이면 진도표 비고에 '휴강' 입력(회차·수강료 제외) |
+| `OPENING_TIME_AMBIGUOUS` | 확인필요 | 수업 시작 시간이 오전/오후 표기 없이 1~6시 — '오전 N시'로 표시됨 | `오후 2:00` 또는 `14:00`으로 입력 |
 | `REQUIRED_FIELD_EMPTY` | 확인필요 | 필수 필드(메인 제목·과목·강사명·강좌명) 공백 | 시트에 입력 |
 | `REQUIRED_PROGRESS_EMPTY` | 확인필요 | 진도표가 비어 있음 | 진도 행 입력 |
 | `A4_OVERFLOW` | 확인필요 | 본문을 하한 폰트까지 줄여도 A4 초과(자르지 않음) | 강사에게 분량 축소 요청 |
@@ -38,18 +40,27 @@ severity 우선순위: **오류**(산출 누락/실패 — 반드시 처리) > *
 | `TEACHER_PHOTO_NOT_FOUND` | 확인필요 | 강사 사진 미삽입(파일 없음 또는 사진박스 미식별) | 파일명(강사명) 확인, 있으면 템플릿 박스 위치 확인 |
 | `TEACHER_PHOTO_INSERT_FAILED` | 확인필요 | 사진 파일이 손상·0바이트라 삽입 실패 | 파일 교체 |
 | `FEE_TABLE_MISSING` | 확인필요 | 강의형태에 맞는 단가 설정 없음(수강료 공백) | `config` FEE_TABLE 확인 |
-| `OPENING_TIME_PARSE_FAILED` | 확인필요 | 수업 시간에서 시작 시간 추출 실패(개강일에 시간 미표기) | PPTX에서 수동 확인 |
+| `OPENING_TIME_PARSE_FAILED` | 확인필요 | 수업 시간에서 시작 시간 추출 실패 또는 범위 밖(25:99 등) — 개강일에 시간 미표기 | 시간 표기 수정 후 재실행 or PPTX 수동 확인 |
 | `SESSION_TYPE_REVIEW_NEEDED` | 확인필요 | 진도 행에 보강/대체 등 키워드 — 회차 포함 여부 확인 필요 | 교무팀 판단 |
 | `ACADEMIC_CALENDAR_CONFLICT` | 확인필요 | 수업일이 학사일정과 겹침 | 일정 확인 |
 | `WEEKDAY_MISMATCH` | 경고 | 입력 요일 표기 ≠ 실제 요일 | 날짜/요일 확인 |
 | `TEXT_LIMIT_EXCEEDED` | 경고 | 권장 글자 수 초과(폰트 축소·확장으로 처리됨) | 필요 시 축약 |
-| `PROGRESS_OVERFLOW` | 경고 | 진도 10개 초과 — PPTX에는 10개까지만 | 초과분 수동 반영 or 분할 |
+| `PROGRESS_OVERFLOW` | 경고 | 진도가 템플릿 슬롯 수(기본 10개)를 초과 — 누락된 행 날짜를 메시지에 표시 | 초과분 수동 반영, 템플릿 진도 행 확장 or 분할 |
+| `FORMULA_NOT_CACHED` | 경고 | 입력 셀이 계산값 없는 수식이라 빈칸으로 읽힘(외부 도구 저장 등) | 엑셀에서 열어 다시 저장 or 값 직접 입력 |
 | `CALENDAR_READ_FAILED` | 경고 | 학사일정 CSV 읽기 실패 — 충돌 검사만 건너뜀 | CSV 인코딩(UTF-8)·형식 확인 |
+| `CALENDAR_NOT_FOUND` | 경고 | 지정한 학사일정 CSV 파일이 없음 — 충돌 검사 건너뜀 | 경로 확인 |
+| `CALENDAR_HEADER_MISSING` | 경고 | 학사일정 CSV에 `날짜` 헤더 없음 — 충돌 검사 건너뜀 | 첫 행을 `날짜,일정명,유형,비고`로 |
+| `CALENDAR_ROW_SKIPPED` | 경고 | 학사일정 CSV의 한 행 날짜 해석 실패 — 그 일정만 제외 | 해당 행 날짜 수정 |
+| `CALENDAR_EMPTY` | 정보 | 학사일정 CSV에 일정이 0건 — 충돌 검사가 실질적으로 꺼져 있음 | 일정을 넣으면 자동 검사 |
+| `FEE_OVERRIDE_UNUSED` | 정보 | `FEE_OVERRIDES`의 키가 이번 입력의 어떤 강좌와도 매칭되지 않음(기본 단가로 계산됨) | 강사명·강좌명 오타 확인, 이번 입력에 없는 강좌면 무시 |
+| `TEMPLATE_EXTRA_SLIDES_REMOVED` | 정보 | 템플릿에 슬라이드가 2장 이상 — 첫 장만 쓰고 나머지는 산출물에서 제외 | 의도한 것이 아니면 템플릿을 1장으로 |
 | `NO_LECTURES` | 정보 | 처리할 강좌 시트가 없음 | 입력 확인 |
 
 > 참고: `normalized_data`의 **flags 컬럼**은 위 리포트 코드와 별개의 강좌 단위 표식입니다
 > (`WEEKDAY_MISMATCH`·`SESSION_TYPE_REVIEW_NEEDED`·`ACADEMIC_CALENDAR_CONFLICT`처럼 리포트와 병행되는 것 외에,
-> `OPENING_TIME_REVIEW_NEEDED`는 flags에만 기록됩니다 — 상세는 같은 강좌의 `OPENING_TIME_PARSE_FAILED` 리포트 행 참조).
+> `OPENING_TIME_REVIEW_NEEDED`는 flags에만 기록됩니다 — 상세는 같은 강좌의 `OPENING_TIME_PARSE_FAILED`/`OPENING_TIME_AMBIGUOUS` 리포트 행 참조).
+> 필수값 검사(`REQUIRED_FIELD_EMPTY`·`REQUIRED_PROGRESS_EMPTY`)는 정규화 단계에서 수행되므로 `--no-pptx` 검증 실행에서도 리포트됩니다.
+> 정규화 산출(`normalized_data.*`) 저장이 실패해도 그때까지의 리포트는 `validation_report.xlsx`에 저장됩니다(이전 실행 리포트가 남지 않음).
 
 ## 3. 장애·이상 시 대처
 

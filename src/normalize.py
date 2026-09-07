@@ -1,39 +1,92 @@
 import csv
+import re
 from pathlib import Path
 
 try:
-    from config.defaults import HOLIDAY_KEYWORDS, REVIEW_NEEDED_KEYWORDS
-    from src.date_utils import extract_start_time_display, format_date_dot, format_period, parse_date, weekday_kr
-    from src.fee import calculate_fee, stable_override_key
-    from src.validate import report_row, validate_text_limits
+    from config.defaults import BASE_YEAR, HOLIDAY_KEYWORDS, HOLIDAY_NEGATION_WORDS, REVIEW_NEEDED_KEYWORDS
+    from src.date_utils import (
+        extract_dates, extract_start_time, format_date_dot, format_period, parse_date_detail, weekday_kr,
+    )
+    from src.fee import calculate_fee, stable_override_key, unused_override_keys
+    from src.validate import report_row, validate_required_values, validate_text_limits
 except ModuleNotFoundError:
-    from ..config.defaults import HOLIDAY_KEYWORDS, REVIEW_NEEDED_KEYWORDS
-    from .date_utils import extract_start_time_display, format_date_dot, format_period, parse_date, weekday_kr
-    from .fee import calculate_fee, stable_override_key
-    from .validate import report_row, validate_text_limits
+    from ..config.defaults import BASE_YEAR, HOLIDAY_KEYWORDS, HOLIDAY_NEGATION_WORDS, REVIEW_NEEDED_KEYWORDS
+    from .date_utils import (
+        extract_dates, extract_start_time, format_date_dot, format_period, parse_date_detail, weekday_kr,
+    )
+    from .fee import calculate_fee, stable_override_key, unused_override_keys
+    from .validate import report_row, validate_required_values, validate_text_limits
 
 
-def load_academic_calendar(path):
+HOLIDAY_FIELD = "휴강일 / 사유 / 수업 불가 일정"
+
+
+def load_academic_calendar(path, base_year=BASE_YEAR):
     """학사일정 CSV → {날짜ISO: [event,...]} 를 (events, reports)로 반환.
-    파일이 없으면 조용히 빈 dict. 읽기/디코딩 실패는 충돌 검사만 건너뛰고
-    리포트에 남긴다(파이프라인 전체를 멈추지 않음 — CSV는 설정 보조 자료)."""
+    읽기/디코딩 실패는 충돌 검사만 건너뛰고 리포트에 남긴다(파이프라인 전체를 멈추지 않음 —
+    CSV는 설정 보조 자료). 경로를 지정했는데 파일이 없거나, 날짜를 못 읽은 행이 있거나,
+    결과적으로 일정이 0건이라 검사가 사실상 꺼진 상태도 모두 리포트한다 — '검사가 돌았는지'를
+    리포트만 보고 알 수 있어야 하기 때문(이전에는 전부 조용히 넘어갔다).
+    연도 없는 날짜(7/7)는 실행의 base_year로 해석한다."""
     if not path:
         return {}, []
     calendar_path = Path(path)
+    calendar_ref = {"source_file": calendar_path.name}
     if not calendar_path.exists():
-        return {}, []
+        return {}, [
+            report_row(
+                "경고",
+                calendar_ref,
+                "학사일정",
+                "CALENDAR_NOT_FOUND",
+                "지정한 학사일정 CSV 파일이 없어 충돌 검사를 건너뜁니다.",
+                raw_value=str(path),
+                suggestion="경로를 확인하거나 학사일정 경로를 비워 주세요.",
+            )
+        ]
 
     events = {}
+    reports = []
     try:
         with calendar_path.open("r", encoding="utf-8-sig", newline="") as f:
-            for row in csv.DictReader(f):
-                parsed, _ = parse_date(row.get("날짜"))
+            reader = csv.DictReader(f)
+            header = [(h or "").strip() for h in (reader.fieldnames or [])]
+            if "날짜" not in header:
+                return {}, [
+                    report_row(
+                        "경고",
+                        calendar_ref,
+                        "학사일정",
+                        "CALENDAR_HEADER_MISSING",
+                        "학사일정 CSV에 '날짜' 헤더 열이 없어 충돌 검사를 건너뜁니다.",
+                        raw_value=",".join(header),
+                        suggestion="첫 행을 '날짜,일정명,유형,비고' 형식으로 맞춰 주세요.",
+                    )
+                ]
+            for line_no, row in enumerate(reader, start=2):
+                row = {(k or "").strip(): v for k, v in row.items()}
+                date_text = str(row.get("날짜") or "").strip()
+                if not date_text or date_text.startswith("#"):
+                    continue   # 빈 행·주석 행
+                parsed, _, _ = parse_date_detail(date_text, base_year=base_year)
                 if parsed:
                     events.setdefault(parsed.isoformat(), []).append(row)
+                else:
+                    reports.append(
+                        report_row(
+                            "경고",
+                            calendar_ref,
+                            "학사일정",
+                            "CALENDAR_ROW_SKIPPED",
+                            f"학사일정 CSV {line_no}행의 날짜를 해석하지 못해 그 일정은 검사에서 빠졌습니다.",
+                            raw_value=date_text,
+                            suggestion="예: 7/20, 2026-07-20 형식으로 입력해 주세요.",
+                        )
+                    )
     except Exception as exc:   # 인코딩 깨짐/권한/형식 오류 등 — 검사만 건너뛰고 계속
         report = report_row(
             "경고",
-            {"source_file": calendar_path.name},
+            calendar_ref,
             "학사일정",
             "CALENDAR_READ_FAILED",
             f"학사일정 CSV를 읽지 못해 충돌 검사를 건너뜁니다: {type(exc).__name__}",
@@ -41,16 +94,39 @@ def load_academic_calendar(path):
             suggestion="CSV 인코딩(UTF-8)·형식을 확인하거나 학사일정 경로를 비워 주세요.",
         )
         return {}, [report]
-    return events, []
+    if not events:
+        reports.append(
+            report_row(
+                "정보",
+                calendar_ref,
+                "학사일정",
+                "CALENDAR_EMPTY",
+                "학사일정 CSV에 일정이 0건이라 학사일정 충돌 검사는 수행되지 않았습니다.",
+                raw_value=str(path),
+                suggestion="휴원일·시험 기간 등을 CSV에 입력하면 수업일과의 충돌을 자동 검사합니다.",
+            )
+        )
+    return events, reports
 
 
 def row_text(row):
     return " ".join(str(row.get(key, "") or "") for key in ("회차", "날짜", "수업 주제", "상세 내용", "비고"))
 
 
+_NEGATION_ALT = "|".join(re.escape(w) for w in sorted(HOLIDAY_NEGATION_WORDS, key=len, reverse=True))
+_HOLIDAY_NEGATION_RE = re.compile(
+    "(?:" + "|".join(re.escape(k) for k in HOLIDAY_KEYWORDS) + r")\s*[:：]?\s*(?:" + _NEGATION_ALT + r")(?![가-힣])"
+)
+
+
+def holiday_text(text):
+    """휴강 부정 표현("휴강 없음"·"휴강X")을 걷어낸 뒤 휴강 키워드가 남아 있는지."""
+    stripped = _HOLIDAY_NEGATION_RE.sub(" ", text or "")
+    return any(keyword in stripped for keyword in HOLIDAY_KEYWORDS)
+
+
 def is_holiday_row(row):
-    text = row_text(row)
-    return any(keyword in text for keyword in HOLIDAY_KEYWORDS)
+    return holiday_text(row_text(row))
 
 
 def has_review_keyword(row):
@@ -64,7 +140,9 @@ def classify_billing(fields):
     월별 계획서의 '정규반만' 필터도 이 is_regular를 그대로 공유한다."""
     gubun = fields.get("구분", "")
     season = fields.get("시즌", "")
-    is_regular = "정규" in gubun
+    # 정규 표기도 구분/시즌 어디에 적어도 인정한다 — 시즌="정규반", 구분="단과"처럼 적으면
+    # 월 단위로 청구하면서 월별 필터는 타지 않는 불일치가 있었다(청구 판정과 필터 판정 공유).
+    is_regular = ("정규" in gubun) or ("정규" in season)
     # 특강 표시는 구분/시즌 어디에 적어도 인정한다. 시즌에 '특강' 단어 없이 '썸머'/'윈터'만
     # 적은 경우(예: 시즌="윈터")도 특강으로 본다 — 둘을 대칭으로 처리(과거엔 썸머만 잡혔음).
     is_special = (not is_regular) and (
@@ -149,9 +227,13 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
     # (윈터 시즌처럼 12월→1월에 걸친 강좌의 날짜·요일·월 필터가 base_year 고정으로 틀어지는 것을 막음.)
     year_offset = 0
     prev_month = None
+    # 휴강일 칸(자유 텍스트)에 적힌 날짜 — 진도표와 대조해 서로 어긋나면 리포트(아래 참조).
+    holiday_field_text = str(fields.get(HOLIDAY_FIELD) or "")
+    holiday_field_dates = set(extract_dates(holiday_field_text, base_year=base_year))
+    holiday_rows = []   # (row_idx, parsed) — 진도표에서 휴강으로 처리한 행
 
     for row_idx, row in enumerate(raw.get("progress", []), start=1):
-        parsed, claimed_weekday = parse_date(row.get("날짜"), base_year=base_year)
+        parsed, claimed_weekday, year_explicit = parse_date_detail(row.get("날짜"), base_year=base_year)
 
         # 내용은 있는데 날짜만 빈 행(셀 병합으로 값이 소거된 경우 등)은 회차에서
         # 빠져 수강료가 입력 의도와 달라진다 — 조용히 넘기지 않고 리포트로 드러낸다.
@@ -201,7 +283,9 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                     # 유지해, 역행 행 하나가 이후 행들의 연도 판정을 오염시키지 않게 한다.
             else:
                 prev_month = parsed.month
-            if year_offset:
+            # 연도가 명시된 날짜(2027-01-04·엑셀 날짜 셀)는 이미 맞는 연도라 보정하지 않는다
+            # (이전에는 12→1 경계 뒤의 명시 연도까지 +1되어 2027→2028로 틀어졌다).
+            if year_offset and not year_explicit:
                 try:
                     parsed = parsed.replace(year=parsed.year + year_offset)
                 except ValueError:
@@ -249,9 +333,30 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
             )
 
         # 다음 달 행은 표시용 — 회차/수강료/기간 누적에는 절대 넣지 않는다(월 단가 메시지 유지).
-        if parsed and not is_holiday_row(row) and not is_next:
+        holiday = is_holiday_row(row)
+        if parsed and not holiday and not is_next:
             row["is_real_class"] = True
             real_class_dates.append(parsed)
+        if parsed and holiday:
+            holiday_rows.append((row_idx, parsed))
+
+        # 휴강일 칸에 적힌 날짜가 진도표에서는 정상 수업으로 계산되는 경우 — 회차·수강료가
+        # 입력 의도와 달라질 수 있다. 값은 고치지 않고(정책: 애매하면 리포트) 사람이 확인.
+        if parsed and not holiday and not is_next and parsed in holiday_field_dates:
+            lecture["flags"].append("HOLIDAY_FIELD_CONFLICT")
+            reports.append(
+                report_row(
+                    "확인필요",
+                    lecture,
+                    "휴강일 / 진도표",
+                    "HOLIDAY_FIELD_CONFLICT",
+                    f"휴강일 칸에 적힌 {parsed.month}/{parsed.day}이(가) 진도표 {row_idx}행에서는 "
+                    "정상 수업으로 계산됐습니다.",
+                    raw_value=holiday_field_text,
+                    computed_value=row_text(row),
+                    suggestion="휴강이 맞으면 진도표 해당 행 비고에 '휴강'을 적어 주세요(회차·수강료에서 제외됩니다).",
+                )
+            )
 
         for keyword in has_review_keyword(row):
             lecture["flags"].append("SESSION_TYPE_REVIEW_NEEDED")
@@ -285,6 +390,30 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
         lecture["progress"].append(row)
 
+    # 반대 방향 대조: 휴강일 칸에 날짜를 적었는데 진도표의 휴강 행이 그 목록에 없는 경우.
+    # (휴강일 칸에 날짜가 하나도 없으면 — "내신기간 휴강"처럼 서술만 있으면 — 대조하지 않는다.)
+    if holiday_field_dates:
+        for row_idx, parsed in holiday_rows:
+            if parsed not in holiday_field_dates:
+                lecture["flags"].append("HOLIDAY_FIELD_CONFLICT")
+                reports.append(
+                    report_row(
+                        "확인필요",
+                        lecture,
+                        "휴강일 / 진도표",
+                        "HOLIDAY_FIELD_CONFLICT",
+                        f"진도표 {row_idx}행({parsed.month}/{parsed.day})은 휴강으로 처리됐지만 휴강일 칸에는 "
+                        "그 날짜가 없습니다.",
+                        raw_value=holiday_field_text,
+                        computed_value=parsed.isoformat(),
+                        suggestion="휴강일 칸과 진도표 중 어느 쪽이 맞는지 확인해 주세요.",
+                    )
+                )
+
+    # 필수 입력값·빈 진도표 검사는 산출 형식(PPTX 생성 여부)과 무관하게 항상 수행한다
+    # (이전에는 PPTX 단계에만 있어 --no-pptx 검증 실행에서 빠졌다).
+    reports.extend(validate_required_values(lecture))
+
     # 월별 모드: 그 달에 실제 수업이 0회인 정규반은 슬라이드를 만들지 않는다(빈 장 방지).
     # 특강은 slice_month=None이라 이 조건을 타지 않고 전체 기간 그대로 유지된다.
     if slice_month is not None and not real_class_dates:
@@ -304,10 +433,27 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
     # 청구 단위는 위에서 판별(classify_billing) — 정규반=monthly, 특강/썸머=total.
     class_time = fields.get("수업 요일 / 시간", "")
-    time_display = extract_start_time_display(class_time)
+    time_info = extract_start_time(class_time)
+    time_display = time_info["display"] if time_info else None
     opening_display = format_date_dot(first_date)
     if opening_display and time_display:
         opening_display = f"{opening_display} {time_display}"
+        if time_info["ambiguous"]:
+            # "화 2:00~5:00"처럼 오전/오후 없이 1~6시로 적힌 경우 — 오후일 가능성이 높지만
+            # 단정하지 않고 표시는 입력 그대로(오전) 두고 확인을 요청한다.
+            lecture["flags"].append("OPENING_TIME_REVIEW_NEEDED")
+            reports.append(
+                report_row(
+                    "확인필요",
+                    lecture,
+                    "수업 요일 / 시간",
+                    "OPENING_TIME_AMBIGUOUS",
+                    f"수업 시작 시간에 오전/오후 표기가 없어 '{time_display}'로 표시했습니다. 오후 수업이면 잘못된 표기입니다.",
+                    raw_value=class_time,
+                    computed_value=time_display,
+                    suggestion="수업 요일 / 시간에 '오후 2:00' 또는 '14:00'처럼 오전/오후를 분명히 적어 주세요.",
+                )
+            )
     elif opening_display and class_time:
         lecture["flags"].append("OPENING_TIME_REVIEW_NEEDED")
         reports.append(
@@ -363,10 +509,44 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
     return lecture, reports
 
 
+def validate_target_month(target_month):
+    """대상 월은 None 또는 1~12. 13 같은 값은 정규반이 전부 조용히 제외되므로 즉시 실패."""
+    if target_month is None:
+        return None
+    if isinstance(target_month, bool) or not isinstance(target_month, int) or not 1 <= target_month <= 12:
+        raise ValueError(f"target_month(대상 월)는 1~12 사이 정수여야 합니다: {target_month!r}")
+    return target_month
+
+
+def fee_override_reports(raw_lectures):
+    """어떤 강좌와도 매칭되지 않은 FEE_OVERRIDES 키를 정보 리포트로. 필터(월별 모드) 이전의
+    전체 입력 강좌를 기준으로 하므로 그 달 수업이 없어 제외된 강좌의 예외는 미사용으로 보지 않는다."""
+    stable_ids = []
+    lecture_ids = []
+    for index, raw in enumerate(raw_lectures, start=1):
+        fields = raw.get("fields", {})
+        stable_ids.append(stable_override_key(fields.get("강사명", ""), fields.get("강좌명", "")))
+        lecture_ids.append(f"L{index:03d}_{raw.get('source_sheet', '')}")
+    return [
+        report_row(
+            "정보",
+            {"source_file": "config/defaults.py"},
+            "FEE_OVERRIDES",
+            "FEE_OVERRIDE_UNUSED",
+            f"수강료 총액 예외 '{key}'가 이번 입력의 어떤 강좌와도 맞지 않아 적용되지 않았습니다.",
+            raw_value=key,
+            suggestion="강사명·강좌명 오타나 강좌명 변경 여부를 확인해 주세요. 이번 입력에 없는 강좌면 무시해도 됩니다.",
+        )
+        for key in unused_override_keys(stable_ids, lecture_ids)
+    ]
+
+
 def normalize_lectures(raw_lectures, base_year, academic_calendar_path=None, target_month=None):
-    calendar_events, calendar_reports = load_academic_calendar(academic_calendar_path)
+    target_month = validate_target_month(target_month)
+    calendar_events, calendar_reports = load_academic_calendar(academic_calendar_path, base_year=base_year)
     normalized = []
-    reports = list(calendar_reports)   # CSV 읽기 실패(CALENDAR_READ_FAILED)도 리포트에 포함
+    reports = list(calendar_reports)   # 학사일정 읽기·건너뜀·0건 리포트도 포함
+    reports.extend(fee_override_reports(raw_lectures))
     # index는 raw 위치 기준(필터와 무관) → lecture_id가 월별 실행에서도 안정적으로 유지된다.
     for index, raw in enumerate(raw_lectures, start=1):
         # 강좌 1건의 예상 밖 예외가 배치 전체(수십 강좌)를 죽이지 않게 강좌 단위로 격리.

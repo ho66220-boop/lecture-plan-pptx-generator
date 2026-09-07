@@ -3,7 +3,7 @@
 ## 1. 패키지 설치
 
 ```python
-!pip install pandas openpyxl python-pptx
+!pip install openpyxl==3.1.5 python-pptx==1.0.2   # requirements.txt와 동일 버전(pandas는 쓰지 않음)
 ```
 
 ## 2. 프로젝트 준비
@@ -64,7 +64,7 @@ result
 ```
 
 > 월별 실행이면 결과 파일명에 대상 연·월이 붙습니다(예: `강의계획서_초안_2026_07_...`).
-> 특강 강좌와 그 달에 수업이 없는 정규반은 슬라이드를 만들지 않습니다.
+> 그 달에 수업이 없는 정규반은 슬라이드를 만들지 않습니다. 특강(썸머·윈터)은 월로 쪼개지 않고 어느 달을 뽑든 전체 기간 그대로 항상 포함됩니다.
 
 ## 6. (선택) 콜랩에서 PPTX 미리보기
 
@@ -77,9 +77,10 @@ result
 
 from pdf2image import convert_from_path
 import glob
-pdf = glob.glob('/tmp/*.pdf')[0]
-for i, img in enumerate(convert_from_path(pdf, dpi=120), 1):
-    display(img)   # 강좌별 슬라이드 미리보기
+import os
+pdf = os.path.join('/tmp', os.path.splitext(os.path.basename(result['pptx_path']))[0] + '.pdf')   # 이번 PPTX의 PDF만
+for i, img in enumerate(convert_from_path(pdf, dpi=120, first_page=1, last_page=8), 1):
+    display(img)   # 강좌별 슬라이드 미리보기(처음 8장 — 전체는 다운로드해서 확인)
 ```
 
 ## 7. 결과 다운로드

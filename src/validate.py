@@ -69,6 +69,43 @@ def validate_text_limits(lecture):
     return reports
 
 
+def validate_required_values(lecture):
+    """필수 필드(메인 제목·과목·강사명·강좌명) 공백과 빈 진도표 검사. 정규화 단계에서 호출되므로
+    PPTX를 만들지 않는 실행(--no-pptx)에서도 리포트된다."""
+    reports = []
+    fields = lecture.get("fields", {})
+    required = {
+        "메인 제목": fields.get("메인 제목", ""),
+        "과목": fields.get("과목", ""),
+        "강사명": fields.get("강사명", ""),
+        "강좌명": fields.get("강좌명", ""),
+    }
+    for field, value in required.items():
+        if not str(value or "").strip():
+            reports.append(
+                report_row(
+                    "확인필요",
+                    lecture,
+                    field,
+                    "REQUIRED_FIELD_EMPTY",
+                    f"{field} 필수값이 비어 있습니다.",
+                    suggestion="강좌 입력 시트에서 값을 입력해 주세요.",
+                )
+            )
+    if not lecture.get("progress"):
+        reports.append(
+            report_row(
+                "확인필요",
+                lecture,
+                "진도표",
+                "REQUIRED_PROGRESS_EMPTY",
+                "진도표가 비어 있습니다.",
+                suggestion="최소 1개 이상의 진도 행을 입력해 주세요.",
+            )
+        )
+    return reports
+
+
 def empty_report_row(message="처리할 강좌 시트가 없습니다."):
     return {
         column: "" for column in REPORT_COLUMNS

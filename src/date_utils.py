@@ -49,18 +49,21 @@ def weekday_kr(value):
     return WEEKDAYS_KR[value.weekday()]
 
 
-def parse_date(value, base_year=BASE_YEAR):
-    """Return (date, claimed_weekday) from common Korean lecture-plan date text."""
+def parse_date_detail(value, base_year=BASE_YEAR):
+    """(date, claimed_weekday, year_explicit) 반환.
+    year_explicit=True는 입력 자체에 연도가 있었다는 뜻(ISO 표기·엑셀 날짜 셀·일련번호).
+    연도가 명시된 날짜는 12→1월 경계의 연도 추론(normalize의 year_offset) 대상이 아니다 —
+    이미 맞는 연도를 한 번 더 올려 2027→2028로 바뀌는 회귀를 막는다."""
     if value is None:
-        return None, None
+        return None, None, False
     if isinstance(value, datetime):
-        return value.date(), None
+        return value.date(), None, True
     if isinstance(value, date):
-        return value, None
+        return value, None, True
 
     text = clean_text(value)
     if not text:
-        return None, None
+        return None, None, False
 
     claimed = None
     weekday_match = re.search(r"\(([월화수목금토일])\)", text)
@@ -70,20 +73,53 @@ def parse_date(value, base_year=BASE_YEAR):
     # 서식이 풀려 숫자로 저장된 날짜(엑셀 일련번호)를 먼저 복구한다. 순수 숫자가 아니면 통과.
     serial_date = _excel_serial_to_date(text)
     if serial_date is not None:
-        return serial_date, claimed
+        return serial_date, claimed, True
 
     for pattern in DATE_PATTERNS:
         match = pattern.search(text)
         if not match:
             continue
-        year = int(match.groupdict().get("year") or base_year)
+        explicit_year = match.groupdict().get("year")
+        year = int(explicit_year or base_year)
         month = int(match.group("month"))
         day = int(match.group("day"))
         try:
-            return date(year, month, day), claimed
+            return date(year, month, day), claimed, bool(explicit_year)
         except ValueError:
-            return None, claimed
-    return None, claimed
+            return None, claimed, bool(explicit_year)
+    return None, claimed, False
+
+
+def parse_date(value, base_year=BASE_YEAR):
+    """Return (date, claimed_weekday) from common Korean lecture-plan date text."""
+    parsed, claimed, _ = parse_date_detail(value, base_year=base_year)
+    return parsed, claimed
+
+
+def extract_dates(value, base_year=BASE_YEAR):
+    """자유 텍스트(예: 휴강일 칸 "7/14, 7/21 내신 휴강")에서 날짜를 전부 뽑아 date 목록으로.
+    연도 표기(2026-07-14)를 먼저 걷어낸 뒤 월/일 표기를 찾아, '2026-07-14'의 '26-07'이
+    월/일로 오인되는 것을 막는다. 해석 불가한 조각은 조용히 건너뛴다(보조 검증용)."""
+    text = clean_text(value)
+    if not text:
+        return []
+    found = []
+
+    def _add(year, month, day):
+        try:
+            found.append(date(int(year), int(month), int(day)))
+        except ValueError:
+            pass
+
+    iso_pattern = DATE_PATTERNS[0]
+    for match in iso_pattern.finditer(text):
+        _add(match.group("year"), match.group("month"), match.group("day"))
+    text = iso_pattern.sub(" ", text)
+    for pattern in DATE_PATTERNS[1:]:
+        for match in pattern.finditer(text):
+            _add(base_year, match.group("month"), match.group("day"))
+        text = pattern.sub(" ", text)
+    return found
 
 
 def format_date_dot(value):
@@ -100,19 +136,60 @@ def format_period(first_date, last_date):
     return f"{first_date.month}/{first_date.day}({weekday_kr(first_date)}) ~ {last_date.month}/{last_date.day}({weekday_kr(last_date)})"
 
 
-def extract_start_time_display(value):
+# 시작 시간 해석: 오전/오후(한글·영문·구어 표현)를 반영하고 시·분 범위를 검증한다.
+# 이전에는 숫자만 뽑아 "오후 2:00"→"오전 2시", "25:99"→"오후 13시 99분"으로 생성됐다.
+_PM_WORDS = ("오후", "저녁", "밤", "pm", "p.m.", "p.m")
+_AM_WORDS = ("오전", "새벽", "아침", "am", "a.m.", "a.m")
+_NOON_WORDS = ("낮", "정오")
+_MERIDIEM_RE = r"(?P<mer>오전|오후|저녁|새벽|아침|낮|정오|밤|[AaPp]\.?[Mm]\.?)"
+_TIME_RE = re.compile(
+    rf"(?:{_MERIDIEM_RE}\s*)?"
+    r"(?P<hour>\d{1,2})\s*(?:[:：]\s*(?P<minute>\d{2})|시\s*(?:(?P<minute_kr>\d{1,2})\s*분)?)"
+    r"(?:\s*(?P<mer_after>[AaPp]\.?[Mm]\.?))?"
+)
+# 오전/오후 표기 없이 1~6시로 적힌 경우: 학원 수업은 보통 오후지만 단정할 수 없어 표시는
+# 24시간제 그대로(오전) 두고 확인필요로 알린다.
+AMBIGUOUS_HOUR_MAX = 6
+
+
+def extract_start_time(value):
+    """수업 시간 텍스트에서 시작 시간을 해석해 dict 반환(해석 불가면 None).
+    {"display": "오후 6시 30분", "hour": 18, "minute": 30, "ambiguous": bool}"""
     text = clean_text(value)
     if not text:
         return None
-    match = re.search(r"(?P<hour>\d{1,2})\s*[:시]\s*(?P<minute>\d{2})?", text)
+    match = _TIME_RE.search(text)
     if not match:
         return None
     hour = int(match.group("hour"))
-    minute = int(match.group("minute") or 0)
-    meridiem = "오전" if hour < 12 else "오후"
-    display_hour = hour if 1 <= hour <= 12 else hour - 12
-    if display_hour == 0:
-        display_hour = 12
+    minute = int(match.group("minute") or match.group("minute_kr") or 0)
+    meridiem = (match.group("mer") or match.group("mer_after") or "").lower()
+    if hour > 23 or minute > 59:
+        return None
+    ambiguous = False
+    if meridiem:
+        if hour > 12:
+            pass   # "오후 14:00"처럼 24시간제와 섞어 쓴 경우 시각 그대로 신뢰
+        elif meridiem in _PM_WORDS or meridiem.startswith("p"):
+            if hour < 12:
+                hour += 12
+        elif meridiem in _AM_WORDS or meridiem.startswith("a"):
+            if hour == 12:
+                hour = 0
+        elif meridiem in _NOON_WORDS:
+            if hour < 6:   # "낮 1시" → 13시
+                hour += 12
+    elif 1 <= hour <= AMBIGUOUS_HOUR_MAX:
+        ambiguous = True
+    display_meridiem = "오전" if hour < 12 else "오후"
+    display_hour = hour % 12 or 12
     if minute:
-        return f"{meridiem} {display_hour}시 {minute}분"
-    return f"{meridiem} {display_hour}시"
+        display = f"{display_meridiem} {display_hour}시 {minute}분"
+    else:
+        display = f"{display_meridiem} {display_hour}시"
+    return {"display": display, "hour": hour, "minute": minute, "ambiguous": ambiguous}
+
+
+def extract_start_time_display(value):
+    info = extract_start_time(value)
+    return info["display"] if info else None

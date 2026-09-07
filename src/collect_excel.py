@@ -34,6 +34,34 @@ def should_skip_sheet(ws):
     return any(keyword in ws.title for keyword in SKIP_SHEET_KEYWORDS)
 
 
+def uncached_formula_cells(formula_wb):
+    """수식은 있는데 계산값 캐시가 없는 셀 좌표 목록 [(시트명, 'B3'), ...].
+    data_only=True로 읽으면 이런 셀은 빈 값이 된다(외부 도구가 만든 파일·계산 전 저장 등).
+    강사명이 이런 셀이면 강좌가 통째로 사라지므로 리포트로 드러낸다."""
+    found = []
+    for ws in formula_wb.worksheets:
+        if should_skip_sheet(ws):
+            continue
+        for row in ws.iter_rows():
+            for cell in row:
+                if cell.data_type == "f":
+                    found.append((ws.title, cell.coordinate))
+    return found
+
+
+def _load_workbook_pair(workbook_path):
+    """(값 워크북, 캐시 없는 수식 셀 목록). 수식이 하나도 없으면 한 번만 읽는다(대부분의 입력)."""
+    formula_wb = load_workbook(workbook_path, data_only=False)
+    formula_cells = uncached_formula_cells(formula_wb)
+    if not formula_cells:
+        return formula_wb, []
+    value_wb = load_workbook(workbook_path, data_only=True)
+    uncached = [
+        (title, coord) for title, coord in formula_cells if value_wb[title][coord].value is None
+    ]
+    return value_wb, uncached
+
+
 def collect_lectures(input_path):
     """입력 폴더/파일의 강좌 시트를 수집. (lectures, reports) 반환.
     열 수 없는 파일(깨짐·암호·확장자만 xlsx 등)은 그 파일만 건너뛰고 리포트에 남겨
@@ -42,7 +70,7 @@ def collect_lectures(input_path):
     reports = []
     for workbook_path in iter_workbooks(input_path):
         try:
-            wb = load_workbook(workbook_path, data_only=True)
+            wb, uncached = _load_workbook_pair(workbook_path)
         except Exception as exc:   # BadZipFile/InvalidFileException/암호 보호 등 — 파일 단위로 격리
             reports.append(
                 report_row(
@@ -56,6 +84,18 @@ def collect_lectures(input_path):
                 )
             )
             continue
+        for sheet_title, coord in uncached:
+            reports.append(
+                report_row(
+                    "경고",
+                    {"source_file": workbook_path.name, "source_sheet": sheet_title},
+                    "입력 파일",
+                    "FORMULA_NOT_CACHED",
+                    f"{sheet_title} 시트 {coord} 셀이 계산값 없는 수식이라 빈칸으로 읽혔습니다.",
+                    raw_value=coord,
+                    suggestion="엑셀에서 파일을 열어 다시 저장하거나, 수식 대신 값을 직접 입력해 주세요.",
+                )
+            )
         for ws in wb.worksheets:
             if should_skip_sheet(ws):
                 continue

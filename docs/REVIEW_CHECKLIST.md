@@ -17,10 +17,14 @@
 - [ ] **`TITLE_OVERFLOW`** — 제목이 14pt로도 2줄 초과. **제목과 강의개요 겹침** 확인, 필요 시 수동 조정.
 - [ ] **`OUT_OF_ORDER_DATE`** — 진도 날짜 역행. 보강 삽입이면 OK, **해를 넘긴 날짜면 강사에게 연도 명시 요청**(수강기간·수강료 확인).
 - [ ] **`BILLING_UNDETERMINED`** — 구분·시즌 공백 → 월 단위로 가정됨. **특강이면 오청구** — 구분 입력 후 재실행.
+- [ ] **`HOLIDAY_FIELD_CONFLICT`** — 휴강일 칸과 진도표의 휴강 표기가 어긋남. **회차·수강료가 달라지는 항목** — 휴강이 맞으면 진도표 비고에 '휴강' 입력 후 재실행.
+- [ ] **`OPENING_TIME_AMBIGUOUS`** — 오전/오후 없는 1~6시 표기. 개강일의 '오전 N시'가 맞는지 확인(오후 수업이면 입력 수정 후 재실행).
+- [ ] **`FEE_OVERRIDE_UNUSED`** — 총액 예외가 어떤 강좌에도 붙지 않음. 그 강좌가 이번 입력에 있다면 **기본 단가로 잘못 계산된 것** — 설정 키의 강사명·강좌명 확인.
 - [ ] **`WEEKDAY_MISMATCH`** — 입력 요일 ≠ 실제 요일. 날짜가 맞는지 강사 확인.
 - [ ] **`TEACHER_PHOTO_NOT_FOUND` / `TEACHER_PHOTO_INSERT_FAILED`** — 회색 박스 슬라이드. 사진 파일명(강사명 일치)·손상 여부, 파일이 있다면 템플릿 사진박스 위치(TEMPLATE_GUIDE 2절) 확인.
 - [ ] **`UNMAPPED_PLACEHOLDER`** — 템플릿 계약 위반(전 슬라이드 영향). TEMPLATE_GUIDE 1절 표와 대조.
-- [ ] `TEXT_LIMIT_EXCEEDED` / `PROGRESS_OVERFLOW` / `FEE_TABLE_MISSING` / `ACADEMIC_CALENDAR_CONFLICT` / `SESSION_TYPE_REVIEW_NEEDED` / `OPENING_TIME_PARSE_FAILED` — 행별 suggestion 컬럼 지시대로.
+- [ ] `TEXT_LIMIT_EXCEEDED` / `PROGRESS_OVERFLOW`(누락된 진도 행 날짜가 메시지에 있음) / `FORMULA_NOT_CACHED` / `FEE_TABLE_MISSING` / `ACADEMIC_CALENDAR_CONFLICT` / `SESSION_TYPE_REVIEW_NEEDED` / `OPENING_TIME_PARSE_FAILED` — 행별 suggestion 컬럼 지시대로.
+- [ ] `CALENDAR_EMPTY` / `CALENDAR_NOT_FOUND` / `CALENDAR_*` — 학사일정 충돌 검사가 **돌지 않았다**는 뜻. 시험 기간·휴원일 충돌은 육안으로 확인.
 
 ## 2. 공통 육안 확인 (전 슬라이드 훑기, 리포트로 안 잡히는 것들)
 
