@@ -70,6 +70,20 @@ def _save_workbook_with_fallback(wb, path, label):
             ) from exc
 
 
+# 엑셀은 '='로 시작하는 문자열을 수식으로 해석한다. 강사 입력("=1+1", "=HYPERLINK(...)")이
+# 정규화·리포트 엑셀에서 수식 셀로 바뀌면 원문이 변형되고 외부 입력의 수식 삽입 경로가 된다 →
+# 항상 텍스트 셀로 고정한다(openpyxl은 data_type='s' 강제로 수식 해석을 끈다).
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def append_text_row(ws, values):
+    """행을 추가하되 문자열 값은 수식으로 해석되지 않게 텍스트 셀로 저장한다."""
+    ws.append(values)
+    for cell in ws[ws.max_row]:
+        if isinstance(cell.value, str) and cell.value.startswith(_FORMULA_PREFIXES):
+            cell.data_type = "s"
+
+
 def style_sheet(ws):
     header_fill = PatternFill("solid", fgColor="EFEFEF")
     for cell in ws[1]:
@@ -110,7 +124,7 @@ def export_normalized_data(lectures, output_dir):
                 row.append(fields.get(column, ""))
             else:
                 row.append(lecture.get(column, ""))
-        ws.append(row)
+        append_text_row(ws, row)
     style_sheet(ws)
     xlsx_path = _save_workbook_with_fallback(
         wb, output / "normalized_data.xlsx", "정규화 데이터"
@@ -126,7 +140,7 @@ def export_validation_report(reports, output_dir):
     ws.title = "validation_report"
     ws.append(REPORT_COLUMNS)
     for item in reports:
-        ws.append([item.get(column, "") for column in REPORT_COLUMNS])
+        append_text_row(ws, [item.get(column, "") for column in REPORT_COLUMNS])
     style_sheet(ws)
     path = _save_workbook_with_fallback(
         wb, output / "validation_report.xlsx", "검증 리포트"

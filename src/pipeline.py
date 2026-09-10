@@ -5,14 +5,14 @@ try:
     from src.collect_excel import collect_lectures
     from src.export_outputs import export_normalized_data, export_validation_report
     from src.generate_pptx import generate_pptx
-    from src.normalize import normalize_lectures
+    from src.normalize import normalize_lectures, validate_target_month
     from src.validate import empty_report_row
 except ModuleNotFoundError:
     from ..config.defaults import BASE_YEAR
     from .collect_excel import collect_lectures
     from .export_outputs import export_normalized_data, export_validation_report
     from .generate_pptx import generate_pptx
-    from .normalize import normalize_lectures
+    from .normalize import normalize_lectures, validate_target_month
     from .validate import empty_report_row
 
 
@@ -28,7 +28,12 @@ def run_pipeline(
 ):
     input_path = Path(input_path)
     output_dir = Path(output_dir)
+    # 입력 경로 오타는 '처리할 강좌 시트가 없습니다'(NO_LECTURES)로 조용히 끝나 원인을 찾기 어려웠다 → 즉시 실패.
+    if not input_path.exists():
+        raise FileNotFoundError(f"입력 경로가 없습니다: {input_path} (엑셀 파일 또는 폴더 경로를 확인해 주세요)")
     output_dir.mkdir(parents=True, exist_ok=True)
+    # 대상 월 13처럼 잘못된 값은 정규반이 전부 조용히 제외되므로 아무것도 만들기 전에 실패시킨다.
+    target_month = validate_target_month(target_month)
 
     if academic_calendar_path is None:
         default_calendar = Path("config") / "academic_calendar_sample.csv"
@@ -47,13 +52,15 @@ def run_pipeline(
     if not lectures:
         reports.append(empty_report_row())
 
-    normalized_xlsx, normalized_json = export_normalized_data(lectures, output_dir)
+    normalized_xlsx = normalized_json = None
     pptx_path = None
-    # PPTX 단계가 예외로 중단돼도(예: 템플릿 손상 → 의도된 즉시 실패) 그때까지 수집한
-    # 리포트를 반드시 파일로 남긴다 — 실패 원인을 알려줄 validation_report가 실패 때문에
-    # 소실되는 것을 방지. 단순히 저장을 앞으로 옮기면 PPTX 단계 리포트(사진 누락·A4 초과
-    # 등)가 빠지므로 finally로 처리한다(정상 경로에서는 pptx_reports 포함 후 저장됨).
+    # 정규화 산출 저장·PPTX 단계가 예외로 중단돼도(예: 파일 잠금, 템플릿 손상 → 의도된 즉시
+    # 실패) 그때까지 수집한 리포트를 반드시 파일로 남긴다 — 실패 원인을 알려줄
+    # validation_report가 실패 때문에 소실되거나, 이전 실행의 리포트가 그대로 남아 이번
+    # 결과처럼 보이는 것을 방지. 단순히 저장을 앞으로 옮기면 PPTX 단계 리포트(사진 누락·A4
+    # 초과 등)가 빠지므로 finally로 처리한다(정상 경로에서는 pptx_reports 포함 후 저장됨).
     try:
+        normalized_xlsx, normalized_json = export_normalized_data(lectures, output_dir)
         if make_pptx and lectures:
             pptx_path, pptx_reports = generate_pptx(
                 lectures,
@@ -77,8 +84,8 @@ def run_pipeline(
     return {
         "lecture_count": len(lectures),
         "report_counts": severity_counts,
-        "normalized_xlsx": str(normalized_xlsx),
-        "normalized_json": str(normalized_json),
+        "normalized_xlsx": str(normalized_xlsx) if normalized_xlsx else "",
+        "normalized_json": str(normalized_json) if normalized_json else "",
         "validation_report": str(validation_report),
         "pptx_path": str(pptx_path) if pptx_path else "",
     }

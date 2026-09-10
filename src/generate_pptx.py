@@ -239,14 +239,46 @@ def fit_slide_to_height(slide, content_ids, target_bottom, guard=FIT_TITLE_GUARD
     return last_scale, False
 
 
+_R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_R_ATTRS = tuple(f"{{{_R_NS}}}{name}" for name in ("embed", "link", "id", "pict"))
+# 슬라이드가 자체적으로 갖는 관계(레이아웃·노트)는 새 슬라이드가 이미 갖고 있으므로 복제 대상이 아니다.
+_SKIP_RELTYPE_SUFFIXES = ("/slideLayout", "/notesSlide")
+
+
+def _clone_slide_rels(template_slide, slide):
+    """템플릿 슬라이드의 이미지·하이퍼링크 등 관계를 새 슬라이드 파트에 추가하고 {구 rId: 새 rId} 반환.
+    도형 XML만 복사하면 로고 그림의 r:embed가 새 슬라이드에는 없는 rId를 가리켜 파일이
+    손상된다(PowerPoint 복구 안내·python-pptx KeyError). 관계까지 옮겨야 그림이 유지된다."""
+    mapping = {}
+    for old_rid, rel in template_slide.part.rels.items():
+        if rel.reltype.endswith(_SKIP_RELTYPE_SUFFIXES):
+            continue
+        if rel.is_external:
+            mapping[old_rid] = slide.part.rels.get_or_add_ext_rel(rel.reltype, rel.target_ref)
+        else:
+            mapping[old_rid] = slide.part.relate_to(rel.target_part, rel.reltype)
+    return mapping
+
+
+def _remap_rids(element, mapping):
+    for node in element.iter():
+        for attr in _R_ATTRS:
+            old = node.get(attr)
+            if old is not None and old in mapping:
+                node.set(attr, mapping[old])
+
+
 def clone_template_slide(prs, template_slide):
-    """Clone shapes from the template slide into a new blank slide."""
+    """Clone shapes (and their image/hyperlink relationships) from the template slide into a new slide."""
     blank_layout = prs.slide_layouts[0]
     slide = prs.slides.add_slide(blank_layout)
     for shape in list(slide.shapes):
         slide.shapes._spTree.remove(shape.element)
+    rid_mapping = _clone_slide_rels(template_slide, slide)
     for shape in template_slide.shapes:
-        slide.shapes._spTree.insert_element_before(copy.deepcopy(shape.element), "p:extLst")
+        element = copy.deepcopy(shape.element)
+        _remap_rids(element, rid_mapping)
+        slide.shapes._spTree.insert_element_before(element, "p:extLst")
     return slide
 
 
@@ -292,15 +324,28 @@ def progress_content_display(row):
     return "\n".join(lines)
 
 
-PROGRESS_MAX_PER_COL = 5     # 한 컬럼(좌/우) 최대 행 수
+PROGRESS_MAX_PER_COL = 5     # 한 컬럼(좌/우) 기본 최대 행 수(템플릿에 진도 슬롯이 없을 때의 기본값)
 PROGRESS_ROW_GAP_CM = 0.45   # 진도표 행 클러스터링 임계(행 내 도형 간격 < 이 값 < 행 사이 간격)
+_PROGRESS_SLOT_RE = re.compile(r"진도_(좌|우)_(\d+)_날짜")
 
 
-def progress_split(n):
-    """진도 n개를 좌우 균형 분배. 좌측=ceil(n/2)(최대 5), 우측=나머지(최대 5).
+def template_progress_capacity(template_slide):
+    """템플릿의 {{진도_좌_N_날짜}} placeholder에서 한 컬럼 최대 행 수를 읽는다.
+    좌·우 중 작은 쪽을 기준으로 해 값을 채운 칸이 항상 템플릿에 존재하게 한다.
+    슬롯이 없으면 기본값(PROGRESS_MAX_PER_COL). 템플릿 행을 6개로 늘리면 코드 수정 없이 12회차까지 반영된다."""
+    per_side = {"좌": 0, "우": 0}
+    for text in collect_texts_from_slide(template_slide):
+        for side, idx in _PROGRESS_SLOT_RE.findall(text or ""):
+            per_side[side] = max(per_side[side], int(idx))
+    found = [n for n in per_side.values() if n > 0]
+    return min(found) if found else PROGRESS_MAX_PER_COL
+
+
+def progress_split(n, max_per_col=PROGRESS_MAX_PER_COL):
+    """진도 n개를 좌우 균형 분배. 좌측=ceil(n/2)(최대 max_per_col), 우측=나머지(최대 max_per_col).
     읽기 순서: 좌측 위→아래가 앞 회차, 그다음 우측. 예) 4→(2,2), 9→(5,4), 10→(5,5)."""
-    n = min(n, PROGRESS_MAX_PER_COL * 2)
-    left = min(PROGRESS_MAX_PER_COL, (n + 1) // 2)
+    n = min(n, max_per_col * 2)
+    left = min(max_per_col, (n + 1) // 2)
     return left, n - left
 
 
@@ -315,7 +360,7 @@ def _cluster_by_top(shapes, gap_emu):
     return rows
 
 
-def balance_progress_columns(slide, left_count, right_count):
+def balance_progress_columns(slide, left_count, right_count, max_per_col=PROGRESS_MAX_PER_COL):
     """진도표에서 채우지 않는 칸의 도형(배경+글상자)을 삭제한다. 칸 식별은 id가 아니라 위치:
     진도 섹션 제목 아래 도형을 top으로 묶어 '행', left로 갈라 '좌/우 컬럼'을 판별.
     우측이 한 칸도 없을 때(right_count==0)만 우측 헤더도 삭제."""
@@ -337,7 +382,7 @@ def balance_progress_columns(slide, left_count, right_count):
     rows = _cluster_by_top(region, int(PROGRESS_ROW_GAP_CM * EMU_PER_CM))
     if len(rows) < 2:
         return
-    header, data_rows = rows[0], rows[1 : 1 + PROGRESS_MAX_PER_COL]
+    header, data_rows = rows[0], rows[1 : 1 + max_per_col]
 
     lefts = sorted({sh.left for sh in region})           # 좌/우 컬럼 경계 = 가장 큰 left 간격
     boundary, best = None, -1
@@ -359,25 +404,25 @@ def balance_progress_columns(slide, left_count, right_count):
         sh._element.getparent().remove(sh._element)
 
 
-def _progress_slots(progress_rows):
+def _progress_slots(progress_rows, max_per_col=PROGRESS_MAX_PER_COL):
     """진도 행을 좌우 균형 분배한 슬롯 목록 (placeholder_side, slot_idx, progress_index)."""
-    left_count, right_count = progress_split(len(progress_rows))
+    left_count, right_count = progress_split(len(progress_rows), max_per_col)
     slots = [("좌", i, i - 1) for i in range(1, left_count + 1)]
     slots += [("우", i, left_count + i - 1) for i in range(1, right_count + 1)]
     return slots
 
 
-def next_month_progress_keys(progress_rows):
+def next_month_progress_keys(progress_rows, max_per_col=PROGRESS_MAX_PER_COL):
     """다음 달 미리보기 행이 들어간 슬롯의 placeholder 키 집합(회색 처리 대상)."""
     keys = set()
-    for side, idx, pidx in _progress_slots(progress_rows):
+    for side, idx, pidx in _progress_slots(progress_rows, max_per_col):
         if progress_rows[pidx].get("is_next_month"):
             keys.add(f"진도_{side}_{idx}_날짜")
             keys.add(f"진도_{side}_{idx}_내용")
     return keys
 
 
-def build_placeholder_map(lecture):
+def build_placeholder_map(lecture, max_per_col=PROGRESS_MAX_PER_COL):
     fields = lecture.get("fields", {})
     # 큰 글씨 = 강좌명, 작은 글씨 = 제목 우선(단 제목이 비었거나 강좌명과 같으면 서브 슬로건).
     course_name = fields.get("강좌명", "")
@@ -413,10 +458,10 @@ def build_placeholder_map(lecture):
     # 월별 모드면 이번 달 + 다음 달 행이 함께 들어 있다(다음 달은 회색 표시).
     progress_rows = lecture.get("progress", [])
     for side in ("좌", "우"):
-        for idx in range(1, 6):
+        for idx in range(1, max_per_col + 1):
             placeholder_map[f"진도_{side}_{idx}_날짜"] = ""
             placeholder_map[f"진도_{side}_{idx}_내용"] = ""
-    for side, idx, pidx in _progress_slots(progress_rows):
+    for side, idx, pidx in _progress_slots(progress_rows, max_per_col):
         row = progress_rows[pidx]
         placeholder_map[f"진도_{side}_{idx}_날짜"] = progress_date_display(row)
         placeholder_map[f"진도_{side}_{idx}_내용"] = progress_content_display(row)
@@ -502,57 +547,27 @@ def unmapped_template_keys(template_slide):
     for text in collect_texts_from_slide(template_slide):
         template_keys.update(m.group(1).strip() for m in PLACEHOLDER_RE.finditer(text or ""))
     # map의 키 집합은 강좌 데이터와 무관하게 항상 동일하다(고정 dict + 진도 슬롯 전체 생성).
-    mapped_keys = set(build_placeholder_map({"fields": {}, "progress": []}))
+    mapped_keys = set(build_placeholder_map({"fields": {}, "progress": []}, template_progress_capacity(template_slide)))
     return sorted(template_keys - mapped_keys)
 
 
-def validate_required_values(lecture):
-    reports = []
-    fields = lecture.get("fields", {})
-    required = {
-        "메인 제목": fields.get("메인 제목", ""),
-        "과목": fields.get("과목", ""),
-        "강사명": fields.get("강사명", ""),
-        "강좌명": fields.get("강좌명", ""),
-    }
-    for field, value in required.items():
-        if not text_value(value).strip():
-            reports.append(
-                report_row(
-                    "확인필요",
-                    lecture,
-                    field,
-                    "REQUIRED_FIELD_EMPTY",
-                    f"{field} 필수값이 비어 있습니다.",
-                    suggestion="강좌 입력 시트에서 값을 입력해 주세요.",
-                )
-            )
-    if not lecture.get("progress"):
-        reports.append(
-            report_row(
-                "확인필요",
-                lecture,
-                "진도표",
-                "REQUIRED_PROGRESS_EMPTY",
-                "진도표가 비어 있습니다.",
-                suggestion="최소 1개 이상의 진도 행을 입력해 주세요.",
-            )
-        )
-    return reports
-
-
-def validate_progress_overflow(lecture):
-    if len(lecture.get("progress", [])) <= 10:
+def validate_progress_overflow(lecture, max_per_col=PROGRESS_MAX_PER_COL):
+    capacity = max_per_col * 2
+    rows = lecture.get("progress", [])
+    if len(rows) <= capacity:
         return []
+    omitted = rows[capacity:]
+    omitted_dates = ", ".join(progress_date_display(row) for row in omitted)
     return [
         report_row(
             "경고",
             lecture,
             "진도표",
             "PROGRESS_OVERFLOW",
-            "진도표가 10개를 초과하여 PPTX에는 10개까지만 반영했습니다.",
-            computed_value=str(len(lecture.get("progress", []))),
-            suggestion="PPTX에서 추가 진도를 수동 반영하거나 템플릿 행을 확장해 주세요.",
+            f"진도표가 {capacity}개를 초과하여 PPTX에는 {capacity}개까지만 반영했습니다. "
+            f"누락된 행({len(omitted)}개): {omitted_dates}",
+            computed_value=str(len(rows)),
+            suggestion="PPTX에서 추가 진도를 수동 반영하거나, 템플릿의 진도 행({{진도_좌_N_날짜}})을 늘려 주세요.",
         )
     ]
 
@@ -577,6 +592,9 @@ def generate_pptx_from_template(
         raise ValueError("Template PPTX has no slide layouts.")
 
     template_slide = prs.slides[0]
+    # 템플릿에 참고용 슬라이드가 더 있어도 산출물에는 강좌 슬라이드만 남긴다(전부 제거하고 알림).
+    extra_template_slides = list(prs.slides)[1:]
+    max_per_col = template_progress_capacity(template_slide)
     # [순서 계약] 세로 중앙 정렬을 적용할 placeholder 값 박스 id. 반드시 치환 "전"
     # 템플릿에서 캡처해야 한다 — 치환이 "{{"를 지우므로 치환 뒤에는 이 조건으로 값 박스를
     # 식별할 수 없다(순서를 바꾸면 content_ids가 비어 A4 fit의 중앙 정렬이 조용히 꺼진다).
@@ -587,6 +605,18 @@ def generate_pptx_from_template(
         if getattr(shape, "has_text_frame", False) and "{{" in shape.text_frame.text
     }
     reports = []
+    if extra_template_slides:
+        reports.append(
+            report_row(
+                "정보",
+                {"source_file": Path(template_path).name},
+                "PPTX 템플릿",
+                "TEMPLATE_EXTRA_SLIDES_REMOVED",
+                f"템플릿에 슬라이드가 {len(prs.slides)}장 있어 첫 장만 강좌 템플릿으로 쓰고 나머지 "
+                f"{len(extra_template_slides)}장은 산출물에서 제외했습니다.",
+                suggestion="의도한 것이 아니면 템플릿 파일에 첫 슬라이드 1장만 남겨 주세요.",
+            )
+        )
     # 템플릿 placeholder ↔ 치환 map 계약 검사(치환 전, 실행당 키당 1회).
     # 특정 강좌의 문제가 아니라 템플릿 오타·개명·신규 미매핑의 문제라 lecture 없이
     # 템플릿 파일명으로 리포트한다(강좌 100개면 100번이 아니라 키당 1번).
@@ -613,18 +643,18 @@ def generate_pptx_from_template(
         # (사진 삽입은 아래 내부 try가 더 세분화된 기존 격리를 유지한다.)
         slide = None
         try:
-            reports.extend(validate_required_values(lecture))
-            reports.extend(validate_progress_overflow(lecture))
+            # (필수값·빈 진도표 검사는 정규화 단계(validate_required_values)에서 이미 수행됨)
+            reports.extend(validate_progress_overflow(lecture, max_per_col))
             slide = clone_template_slide(prs, template_slide)
             progress_rows = lecture.get("progress", [])
-            gray_keys = next_month_progress_keys(progress_rows)   # 다음 달 미리보기 → 회색
-            replace_placeholders_in_slide(slide, build_placeholder_map(lecture), gray_keys)
+            gray_keys = next_month_progress_keys(progress_rows, max_per_col)   # 다음 달 미리보기 → 회색
+            replace_placeholders_in_slide(slide, build_placeholder_map(lecture, max_per_col), gray_keys)
             # [불변식 공유] 이 progress_split은 build_placeholder_map(내부 _progress_slots)이
             # 좌우 슬롯에 값을 채울 때 쓴 것과 동일한 분배 계산이다. 두 호출이 같은 값을 내야
             # "값을 채운 칸"과 "남겨 둔 칸"이 일치한다 — 한쪽만 바꾸면 빈 칸 또는 유령 값이
             # 리포트 없이 생긴다(분배 규칙 변경 시 두 사용처를 함께 검토할 것).
-            left_count, right_count = progress_split(len(progress_rows))
-            balance_progress_columns(slide, left_count, right_count)   # 안 쓰는 칸 도형 삭제
+            left_count, right_count = progress_split(len(progress_rows), max_per_col)
+            balance_progress_columns(slide, left_count, right_count, max_per_col)   # 안 쓰는 칸 도형 삭제
             # [순서 고정] badges → title → A4 fit. 배지·제목 폰트를 먼저 확정해야
             # fit_slide_to_height의 스냅샷(_snapshot_layout)이 그 상태를 기준으로 잡고
             # 본문만 차등 축소한다 — 순서를 바꾸면 스냅샷/복원 기준이 틀어져 레이아웃이
@@ -645,15 +675,17 @@ def generate_pptx_from_template(
                 )
             fit_scale, fitted = fit_slide_to_height(slide, content_ids, target_bottom)
             if not fitted:
+                overflow_cm = (_max_bottom(slide) - target_bottom) / EMU_PER_CM
                 reports.append(
                     report_row(
                         "확인필요",
                         lecture,
                         "PPTX",
                         "A4_OVERFLOW",
-                        "강의특징/관리 본문 폰트를 가독성 하한까지 줄여도 A4 한 장에 안 들어갑니다. "
-                        "코드가 더 줄이지 않으니(가독성 우선), 강사 분량을 줄여야 합니다.",
-                        raw_value=f"scale={fit_scale}, prose_floor_cfg={PROSE_MIN_PT:.0f}pt",
+                        f"강의특징/관리 본문 폰트를 가독성 하한까지 줄여도 A4 한 장에 안 들어갑니다(약 {overflow_cm:.1f}cm 초과). "
+                        "코드가 더 줄이지 않으니(가독성 우선), 강사 분량을 줄여야 합니다. "
+                        "인쇄·PDF 변환 시 페이지 아래 내용이 잘립니다.",
+                        raw_value=f"overflow_cm={overflow_cm:.2f}, scale={fit_scale}, prose_floor_cfg={PROSE_MIN_PT:.0f}pt",
                         suggestion="강의특징/관리 프로그램 문구를 줄여 주세요(이번 한 장 분량 초과).",
                     )
                 )
@@ -707,6 +739,8 @@ def generate_pptx_from_template(
             )
 
     remove_slide(prs, template_slide)
+    for extra in extra_template_slides:
+        remove_slide(prs, extra)
     # 슬라이드 높이는 A4(템플릿 그대로) 유지 — fit_slide_to_height가 내용을 A4 안에 맞춰 둠.
     # 최종 슬라이드 크기가 정해진 뒤 과목 색 테두리를 두른다(테두리가 전체 면적을 감싸야 하므로).
     for slide, subject in zip(generated_slides, slide_subjects):

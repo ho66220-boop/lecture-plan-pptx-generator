@@ -21,6 +21,30 @@ _FEE_TABLE_NORMALIZED = {_normalize_format_key(k): v for k, v in FEE_TABLE.items
 _FEE_BY_TEACHER = {_normalize_name_key(k): v for k, v in FEE_PER_SESSION_OVERRIDES.items()}
 
 
+def normalize_override_key(key):
+    """FEE_OVERRIDES 설정 키를 조회 키와 같은 규칙으로 정규화.
+    '강사명|강좌명' 키는 양쪽을 공백 제거+NFC(stable_override_key와 동일), 구버전 lecture_id
+    키는 양끝 공백만 제거. 설정 예시대로 "홍길동|A고 국어 내신 대비반"처럼 띄어 써도 매칭된다
+    (이전에는 조회 키만 공백을 없애 설정 키와 어긋나 예외가 조용히 무시됐다)."""
+    text = str(key or "").strip()
+    if "|" in text:
+        teacher, course = text.split("|", 1)
+        return stable_override_key(teacher, course)
+    return text
+
+
+def _normalized_overrides():
+    """{정규화 키: 총액}. 매 호출마다 만든다(설정은 소규모, 테스트가 FEE_OVERRIDES를 직접 패치)."""
+    return {normalize_override_key(key): value for key, value in FEE_OVERRIDES.items()}
+
+
+def unused_override_keys(stable_ids, lecture_ids):
+    """이번 실행의 어떤 강좌와도 매칭되지 않은 FEE_OVERRIDES 설정 키 목록(원문 키).
+    오타·강좌명 변경으로 예외가 붙지 않은 채 기본 단가로 계산되는 것을 리포트로 드러내기 위함."""
+    matched = {normalize_override_key(k) for k in stable_ids} | {str(k).strip() for k in lecture_ids}
+    return [key for key in FEE_OVERRIDES if normalize_override_key(key) not in matched]
+
+
 def stable_override_key(teacher_name, course_name):
     """FEE_OVERRIDES용 안정 키 '강사명|강좌명'.
 
@@ -48,11 +72,12 @@ def calculate_fee(
     총액 예외(FEE_OVERRIDES)는 안정 키(stable_id, '강사명|강좌명')를 먼저 보고,
     없으면 기존 lecture_id 키도 조회한다(하위 호환).
     """
+    overrides = _normalized_overrides()
     override = None
     if stable_id is not None:
-        override = FEE_OVERRIDES.get(stable_id)
+        override = overrides.get(normalize_override_key(stable_id))
     if override is None:
-        override = FEE_OVERRIDES.get(lecture_id)
+        override = overrides.get(str(lecture_id or "").strip())
     if override is not None:
         total = int(override)
         return {
