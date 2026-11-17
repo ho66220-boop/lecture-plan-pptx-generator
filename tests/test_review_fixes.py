@@ -71,11 +71,10 @@ def test_mixed_explicit_and_implicit_years_stay_consistent():
     assert [r["parsed_date"] for r in lec["progress"]] == ["2026-12-28", "2027-01-04", "2027-01-11"]
 
 
-def test_december_preview_keeps_explicit_january():
+def test_december_block_keeps_explicit_january():
     lec, _ = normalize_lecture(make_raw(["2026-12-28", "2027-01-04"]), 1, 2026, target_month=12)
     assert [r["parsed_date"] for r in lec["progress"]] == ["2026-12-28", "2027-01-04"]
-    assert lec["progress"][1]["is_next_month"] is True
-    assert lec["computed_total_sessions"] == 1
+    assert lec["computed_total_sessions"] == 2             # 강좌 전체가 회차(달력 월로 자르지 않음)
 
 
 def test_parse_date_detail_reports_explicit_year():
@@ -217,8 +216,9 @@ def test_missing_input_path_fails_loudly(tmp_path):
 def test_season_regular_is_filtered_by_month():
     lec, _ = normalize_lecture(make_raw(["7/7", "8/4"], 구분="단과", 시즌="정규반"), 1, 2026, target_month=7)
     assert lec["billing"] == "monthly"
-    assert lec["computed_total_sessions"] == 1
-    assert lec["progress"][1]["is_next_month"] is True
+    assert lec["computed_total_sessions"] == 2
+    # 시즌="정규반"도 정규반으로 인식돼 대상 월 필터를 탄다(8월 계획서에서는 빠짐).
+    assert normalize_lecture(make_raw(["7/7", "8/4"], 구분="단과", 시즌="정규반"), 1, 2026, target_month=8)[0] is None
 
 
 # ── Medium: 학사일정 검사가 돌았는지 리포트로 알 수 있다 ──

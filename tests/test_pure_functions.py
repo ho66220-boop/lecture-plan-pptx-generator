@@ -134,3 +134,23 @@ def test_est_lines_structural(text, width_pt, font_pt, wrap, expected):
 )
 def test_est_lines_wrapping_locks_ratio(text, width_pt, font_pt, expected):
     assert _est_lines(text, width_pt, font_pt, wrap=True) == expected
+
+
+# ── 2022 개정 교육과정 선택과목: 과목명 그대로 배지에 쓰고 계열 색만 맞춘다 ──
+
+@pytest.mark.parametrize(
+    "subject, color",
+    [
+        ("역학과 에너지", "74C0FC"), ("전자기와 양자", "74C0FC"), ("물질과 에너지", "74C0FC"),
+        ("화학 반응의 세계", "74C0FC"), ("세포와 물질대사", "74C0FC"), ("생물의 유전", "74C0FC"),
+        ("지구시스템과학", "74C0FC"), ("행성우주과학", "74C0FC"),
+        ("화법과 언어", "FF8787"), ("독서와 작문", "FF8787"), ("문학", "FF8787"),
+        ("사회와 문화", "69DB7C"), ("독서논술", "B197FC"),
+    ],
+)
+def test_new_curriculum_subjects_keep_name_and_get_family_color(subject, color):
+    from src.generate_pptx import normalize_subject
+    from src.subject_band import subject_color
+
+    assert normalize_subject(subject) == subject           # 과목명은 줄이거나 바꾸지 않는다
+    assert subject_color(subject) == color

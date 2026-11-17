@@ -311,7 +311,6 @@ def progress_date_display(row):
 
 
 HOLIDAY_RED = RGBColor(0xC0, 0x00, 0x00)   # 진도계획 휴강 표시 색
-NEXT_MONTH_GRAY = RGBColor(0x99, 0x99, 0x99)   # 월별 계획서의 다음 달 미리보기 행 색(회색)
 
 
 def progress_content_display(row):
@@ -412,16 +411,6 @@ def _progress_slots(progress_rows, max_per_col=PROGRESS_MAX_PER_COL):
     return slots
 
 
-def next_month_progress_keys(progress_rows, max_per_col=PROGRESS_MAX_PER_COL):
-    """다음 달 미리보기 행이 들어간 슬롯의 placeholder 키 집합(회색 처리 대상)."""
-    keys = set()
-    for side, idx, pidx in _progress_slots(progress_rows, max_per_col):
-        if progress_rows[pidx].get("is_next_month"):
-            keys.add(f"진도_{side}_{idx}_날짜")
-            keys.add(f"진도_{side}_{idx}_내용")
-    return keys
-
-
 def build_placeholder_map(lecture, max_per_col=PROGRESS_MAX_PER_COL):
     fields = lecture.get("fields", {})
     # 큰 글씨 = 강좌명, 작은 글씨 = 제목 우선(단 제목이 비었거나 강좌명과 같으면 서브 슬로건).
@@ -455,7 +444,6 @@ def build_placeholder_map(lecture, max_per_col=PROGRESS_MAX_PER_COL):
     }
 
     # 진도 좌우 균형 분배: 좌측=ceil(n/2), 우측=나머지. 좌측 위→아래가 앞 회차, 그다음 우측.
-    # 월별 모드면 이번 달 + 다음 달 행이 함께 들어 있다(다음 달은 회색 표시).
     progress_rows = lecture.get("progress", [])
     for side in ("좌", "우"):
         for idx in range(1, max_per_col + 1):
@@ -477,29 +465,25 @@ def replace_placeholders_in_text(text, placeholder_map):
     return PLACEHOLDER_RE.sub(replace, text)
 
 
-def replace_placeholders_in_paragraph(paragraph, placeholder_map, gray_keys=()):
+def replace_placeholders_in_paragraph(paragraph, placeholder_map):
     if not paragraph.runs:
         return
     original = "".join(run.text for run in paragraph.runs)
     if "{{" not in original:
         return
-    keys = [match.group(1).strip() for match in PLACEHOLDER_RE.finditer(original)]
     replaced = replace_placeholders_in_text(original, placeholder_map)
     paragraph.runs[0].text = replaced
     for run in paragraph.runs[1:]:
         run.text = ""
-    # 휴강 빨강이 회색보다 우선. 그 외 다음 달 미리보기 행은 회색.
     # 회차 제외 판정(is_holiday_row)과 동일하게 HOLIDAY_KEYWORDS 부분일치로 통일
     # ('내신기간 휴강'·'8/31 휴강'처럼 '휴강'으로 시작하지 않아도 빨강 처리).
     if any(keyword in replaced for keyword in HOLIDAY_KEYWORDS):
         paragraph.runs[0].font.color.rgb = HOLIDAY_RED
-    elif gray_keys and any(key in gray_keys for key in keys):
-        paragraph.runs[0].font.color.rgb = NEXT_MONTH_GRAY
 
 
-def replace_placeholders_in_text_frame(text_frame, placeholder_map, gray_keys=()):
+def replace_placeholders_in_text_frame(text_frame, placeholder_map):
     for paragraph in text_frame.paragraphs:
-        replace_placeholders_in_paragraph(paragraph, placeholder_map, gray_keys)
+        replace_placeholders_in_paragraph(paragraph, placeholder_map)
 
 
 def iter_shapes(shapes):
@@ -509,18 +493,18 @@ def iter_shapes(shapes):
             yield from iter_shapes(shape.shapes)
 
 
-def replace_placeholders_in_shape(shape, placeholder_map, gray_keys=()):
+def replace_placeholders_in_shape(shape, placeholder_map):
     if getattr(shape, "has_text_frame", False):
-        replace_placeholders_in_text_frame(shape.text_frame, placeholder_map, gray_keys)
+        replace_placeholders_in_text_frame(shape.text_frame, placeholder_map)
     if getattr(shape, "has_table", False):
         for row in shape.table.rows:
             for cell in row.cells:
-                replace_placeholders_in_text_frame(cell.text_frame, placeholder_map, gray_keys)
+                replace_placeholders_in_text_frame(cell.text_frame, placeholder_map)
 
 
-def replace_placeholders_in_slide(slide, placeholder_map, gray_keys=()):
+def replace_placeholders_in_slide(slide, placeholder_map):
     for shape in iter_shapes(slide.shapes):
-        replace_placeholders_in_shape(shape, placeholder_map, gray_keys)
+        replace_placeholders_in_shape(shape, placeholder_map)
 
 
 def collect_texts_from_slide(slide):
@@ -647,8 +631,7 @@ def generate_pptx_from_template(
             reports.extend(validate_progress_overflow(lecture, max_per_col))
             slide = clone_template_slide(prs, template_slide)
             progress_rows = lecture.get("progress", [])
-            gray_keys = next_month_progress_keys(progress_rows, max_per_col)   # 다음 달 미리보기 → 회색
-            replace_placeholders_in_slide(slide, build_placeholder_map(lecture, max_per_col), gray_keys)
+            replace_placeholders_in_slide(slide, build_placeholder_map(lecture, max_per_col))
             # [불변식 공유] 이 progress_split은 build_placeholder_map(내부 _progress_slots)이
             # 좌우 슬롯에 값을 채울 때 쓴 것과 동일한 분배 계산이다. 두 호출이 같은 값을 내야
             # "값을 채운 칸"과 "남겨 둔 칸"이 일치한다 — 한쪽만 바꾸면 빈 칸 또는 유령 값이

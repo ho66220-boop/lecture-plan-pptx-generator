@@ -32,15 +32,15 @@ def dated(dates):
 def test_out_of_order_date_does_not_bump_year():
     """# P2-1 회귀 방지
     요일 표기 없는 진도 7/1,7/8,6/24(보강),7/15,7/22 — 현재는 6/24에서 연도가
-    +1되어 이후 전 행이 2027로 밀리고 수강료가 반토막(월 160,000)·리포트 0건.
-    기대: 전 행 2026 유지, 총회차 5, 월 회차 분할집계 없음(월 320,000원),
+    +1되어 이후 전 행이 2027로 밀리고 리포트 0건이었다.
+    기대: 전 행 2026 유지, 총회차 5, 수강료는 5회분 전부(400,000원),
     OUT_OF_ORDER_DATE 리포트 존재."""
     lec, reports = normalize_lecture(make_raw(dated(["7/1", "7/8", "6/24", "7/15", "7/22"])), 1, 2026)
 
     assert lec["last_class_date"] == "2026-07-22"          # 연도 오염 없음
     assert lec["computed_total_sessions"] == 5             # 보강행도 실제 수업으로 포함
-    assert lec["computed_fee"] == 320000                   # 월 회차 4 유지(분할집계 방지)
-    assert lec["fee_display"] == "월 320,000원 (회차당 80,000원)"
+    assert lec["computed_fee"] == 400000                   # 보강행 포함 5회분
+    assert lec["fee_display"] == "400,000원 (회차당 80,000원)"
     years = {r["parsed_date"][:4] for r in lec["progress"] if r["parsed_date"]}
     assert years == {"2026"}                               # 전 행 base_year 유지
     codes = [r["issue_code"] for r in reports]

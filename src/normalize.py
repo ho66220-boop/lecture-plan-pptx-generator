@@ -136,8 +136,10 @@ def has_review_keyword(row):
 
 def classify_billing(fields):
     """구분/시즌으로 정규/특강을 판별. (is_regular, billing) 반환.
-    정규와 특강이 동시에 붙으면(구분 혼합·여름 정규반) 정규 우선 → monthly(과다청구 방지).
-    월별 계획서의 '정규반만' 필터도 이 is_regular를 그대로 공유한다."""
+    정규와 특강이 동시에 붙으면(구분 혼합·여름 정규반) 정규 우선 → monthly.
+    billing은 강좌 종류 표식이다("monthly"=정규반(월 강좌), "total"=특강). 수강료 계산은
+    두 경우 모두 시트 전체 회차 합계다 — 시트 1장이 한 번에 결제하는 강좌 1개이기 때문
+    (calculate_fee 참조). is_regular는 월별 계획서의 '대상 월 정규반만' 필터가 쓴다."""
     gubun = fields.get("구분", "")
     season = fields.get("시즌", "")
     # 정규 표기도 구분/시즌 어디에 적어도 인정한다 — 시즌="정규반", 구분="단과"처럼 적으면
@@ -152,19 +154,44 @@ def classify_billing(fields):
     return is_regular, ("total" if is_special else "monthly")
 
 
-def _in_target_month(parsed, year, month):
-    """parsed_date가 대상 연·월에 속하는지."""
-    return parsed is not None and parsed.year == year and parsed.month == month
+_SEASON_MONTHS_RE = re.compile(r"((?:\d{1,2}\s*[,·/~\-]\s*)*\d{1,2})\s*월")
 
 
-def _date_parse_failed_report(lecture, row_idx, raw_value, excluded_month=None):
-    """진도 날짜 해석 실패 리포트(월별 제외 분기/본류 공용 — 문구는 기존 그대로)."""
-    if excluded_month is not None:
-        message = f"진도표 {row_idx}행 날짜를 해석하지 못해 {excluded_month}월 계획서에서 제외했습니다."
-        suggestion = "예: 7/20(월), 2026-07-20 형식으로 입력해 주세요."
-    else:
-        message = f"진도표 {row_idx}행 날짜를 해석하지 못했습니다."
-        suggestion = "예: 5/4(월), 2026-05-04 형식으로 입력해 주세요."
+def season_months(season):
+    """시즌 칸에 적힌 월 목록. "10월"→[10], "7,8월"→[7, 8], "11~1월"→[11, 12, 1], 월 표기 없으면 [].
+    '월' 앞에 붙은 숫자만 본다("5월 2주차"의 2는 월이 아님). 연도(2026년)는 걷어낸다."""
+    text = re.sub(r"\d{4}\s*년?", " ", str(season or ""))
+    months = []
+    for group in _SEASON_MONTHS_RE.findall(text):
+        for part in re.split(r"\s*[,·/]\s*", group):
+            ends = [int(n) for n in re.split(r"\s*[~\-]\s*", part) if n]
+            if not ends or not all(1 <= n <= 12 for n in ends):
+                continue
+            month = ends[0]
+            months.append(month)
+            while month != ends[-1]:          # "11~1월"처럼 해를 넘는 범위도 순방향으로 펼침
+                month = month % 12 + 1
+                months.append(month)
+    return list(dict.fromkeys(months))
+
+
+def _target_date_year(progress, base_year, target_month):
+    """월별 계획서에서 연도 없는 날짜(12/27)를 해석할 기준 연도.
+    1월 강좌가 전년 12월 말에 개강하는 경우(실데이터: 12/27~12/31 개강), base_year로 읽으면
+    12/27이 '그 해 12월'이 되어 대상 월(1월)보다 11개월 뒤로 밀린다 → 전년으로 읽는다."""
+    for row in progress:
+        parsed, _, year_explicit = parse_date_detail(row.get("날짜"), base_year=base_year)
+        if parsed is None or year_explicit:
+            continue
+        months_after_target = (parsed.year - base_year) * 12 + parsed.month - target_month
+        return base_year - 1 if months_after_target > 6 else base_year
+    return base_year
+
+
+def _date_parse_failed_report(lecture, row_idx, raw_value):
+    """진도 날짜 해석 실패 리포트."""
+    message = f"진도표 {row_idx}행 날짜를 해석하지 못했습니다."
+    suggestion = "예: 5/4(월), 2026-05-04 형식으로 입력해 주세요."
     return report_row(
         "오류",
         lecture,
@@ -176,12 +203,77 @@ def _date_parse_failed_report(lecture, row_idx, raw_value, excluded_month=None):
     )
 
 
+def _class_months(real_class_dates):
+    """실제 수업일이 걸친 월 → 회차 수."""
+    counts = {}
+    for class_date in real_class_dates:
+        counts[class_date.month] = counts.get(class_date.month, 0) + 1
+    return counts
+
+
+def _target_month_exclusion(lecture, fields, real_class_dates, base_year, target_month):
+    """정규반이 대상 월 강좌가 아니면 제외 리포트 1건, 대상이면 None.
+    판별 순서: ① 시즌 칸의 월 표기 ② 없으면 개강일(첫 수업일)의 연·월."""
+    season = str(fields.get("시즌") or "").strip()
+    months = season_months(season)
+    first_date = min(real_class_dates) if real_class_dates else None
+    if not real_class_dates:
+        severity, reason = "확인필요", "진도표에서 수업일을 하나도 읽지 못했습니다"
+        suggestion = "진도표 날짜를 확인해 주세요(전체 기간 실행에서 상세 리포트를 볼 수 있습니다)."
+    elif months:
+        if target_month in months:
+            return None
+        severity, reason = "정보", f"시즌 칸이 '{season}'입니다"
+        suggestion = f"{target_month}월 강좌가 맞다면 시즌 칸을 '{target_month}월'로 고쳐 주세요."
+    else:
+        if (first_date.year, first_date.month) == (base_year, target_month):
+            return None
+        # 개강월은 다르지만 수업이 대상 월에 걸쳐 있으면(12/27 개강 1월 강좌 등) 잘못 빠졌을 수 있다.
+        touches = target_month in _class_months(real_class_dates)
+        severity = "확인필요" if touches else "정보"
+        reason = f"시즌 칸에 월 표기가 없어 개강일({first_date.isoformat()}) 기준으로 판별했습니다"
+        suggestion = f"{target_month}월 강좌가 맞다면 시즌 칸에 '{target_month}월'을 적어 주세요."
+    return report_row(
+        severity,
+        lecture,
+        "시즌 / 진도표 날짜",
+        "TARGET_MONTH_EXCLUDED",
+        f"{target_month}월 계획서에서 이 정규반을 제외했습니다: {reason}.",
+        raw_value=season,
+        computed_value=first_date.isoformat() if first_date else "",
+        suggestion=suggestion,
+    )
+
+
+def _target_month_ambiguity(lecture, fields, real_class_dates, target_month):
+    """개강일만으로 대상 월에 넣었는데 수업 대부분이 다른 달이면 확인 요청(월말 개강 강좌)."""
+    if season_months(fields.get("시즌")) or not real_class_dates:
+        return []
+    counts = _class_months(real_class_dates)
+    busiest = max(counts, key=counts.get)
+    if counts[busiest] <= counts.get(target_month, 0):
+        return []
+    return [
+        report_row(
+            "확인필요",
+            lecture,
+            "시즌 / 진도표 날짜",
+            "TARGET_MONTH_AMBIGUOUS",
+            f"개강일 기준으로 {target_month}월 계획서에 넣었지만 수업 대부분({counts[busiest]}회)이 {busiest}월입니다.",
+            raw_value=str(fields.get("시즌") or ""),
+            computed_value=min(real_class_dates).isoformat(),
+            suggestion=f"{busiest}월 강좌라면 시즌 칸에 '{busiest}월'을 적어 주세요({target_month}월 계획서에서 빠집니다).",
+        )
+    ]
+
+
 def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=None):
-    """target_month(int, 예: 7)가 주어지면 '월별 계획서' 모드:
-    정규반은 진도를 그 달(base_year+target_month)만 잘라 회차·기간·수강료를 재계산한다.
-    특강(썸머특강 등)은 패키지 단위라 월로 쪼개지 않고 전체 기간 그대로 항상 포함한다.
-    그 달 수업이 0회인 정규반만 (None, reports)를 돌려 슬라이드를 만들지 않는다.
-    target_month=None이면 기존 동작(전체 기간, 전 강좌) 그대로."""
+    """시트 1장 = 한 번에 결제하는 강좌 1개(개강~종강). 회차·기간·수강료는 항상 시트 전체로 계산한다
+    (달력 월로 자르지 않는다 — 10월 강좌가 10/3~11/14처럼 다음 달에 끝나는 경우가 실데이터의 약 19%).
+    target_month(int, 예: 7)가 주어지면 '월별 계획서' 모드: 정규반 중 그 달 강좌만 남긴다.
+    그 달 강좌인지는 시즌 칸의 월 표기("10월")로, 없으면 개강일의 월로 판별한다.
+    대상이 아닌 정규반은 (None, reports)를 돌려 슬라이드를 만들지 않고 제외 사실을 리포트한다.
+    특강(썸머특강 등)은 어느 달을 뽑든 항상 포함한다."""
     fields = raw.get("fields", {})
     lecture_id = f"L{index:03d}_{raw.get('source_sheet', '')}"
     lecture = {
@@ -198,10 +290,8 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
     # 정규/특강 판별(청구 + 월별 필터 공유).
     is_regular, billing = classify_billing(fields)
-    # 구분·시즌이 모두 비어 판별 근거가 0이면 monthly로 가정된다 — 특강인데 표기를
-    # 누락하면 총액이 아닌 월 단위로 오청구될 수 있으므로 조용히 가정하지 않고 리포트.
-    # (classify_billing의 반환값·계산은 불변. 회차 0이어도 발동 — 입력 완결성 신호라
-    #  한 번의 실행에서 모든 수정 지점이 보이게 한다.)
+    # 구분·시즌이 모두 비어 판별 근거가 0이면 정규반으로 보지 않는다 → 월별 계획서에서 대상 월과
+    # 무관하게 항상 포함된다. 조용히 가정하지 않고 리포트(회차 0이어도 발동 — 입력 완결성 신호).
     if not str(fields.get("구분") or "").strip() and not str(fields.get("시즌") or "").strip():
         reports.append(
             report_row(
@@ -209,19 +299,14 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                 lecture,
                 "구분/시즌",
                 "BILLING_UNDETERMINED",
-                "구분·시즌이 모두 비어 정규/특강 판별 근거가 없습니다. 월 단위(monthly) 청구로 가정했습니다.",
-                suggestion="특강·썸머·윈터 강좌라면 구분 또는 시즌을 입력해 주세요(강좌 전체 합계로 청구 계산됩니다).",
+                "구분·시즌이 모두 비어 정규/특강 판별 근거가 없습니다. 월별 계획서에서 대상 월과 무관하게 항상 포함됩니다.",
+                suggestion="구분(정규반/특강)과 시즌(예: 10월)을 입력해 주세요. 정규반은 그 달 계획서에만 들어갑니다.",
             )
         )
-    # 월별 모드라도 특강은 패키지 단위(썸머특강 등)라 월로 쪼개지 않고 전체 기간 그대로 넣는다.
-    # → 엑셀에 있으면 어느 달 계획서를 뽑든 항상 포함. 정규반만 그 달로 슬라이싱한다.
-    slice_month = target_month if (target_month is not None and is_regular) else None
-
-    # 다음 달(미리보기용). 12월이면 다음 해 1월.
-    next_year, next_month = None, None
-    if slice_month is not None:
-        next_month = 1 if slice_month == 12 else slice_month + 1
-        next_year = base_year + 1 if slice_month == 12 else base_year
+    # 월별 모드의 대상 월 필터는 정규반에만 적용한다(특강은 항상 포함).
+    filter_month = target_month if (target_month is not None and is_regular) else None
+    # 연도 없는 날짜를 해석할 기준 연도(1월 강좌의 12월 말 개강 → 전년).
+    date_year = _target_date_year(raw.get("progress", []), base_year, filter_month) if filter_month else base_year
 
     # 진도표는 위→아래 시간순이므로, 월이 줄어들면(예: 12→1) 해를 넘긴 것으로 보고 연도를 +1.
     # (윈터 시즌처럼 12월→1월에 걸친 강좌의 날짜·요일·월 필터가 base_year 고정으로 틀어지는 것을 막음.)
@@ -229,11 +314,11 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
     prev_month = None
     # 휴강일 칸(자유 텍스트)에 적힌 날짜 — 진도표와 대조해 서로 어긋나면 리포트(아래 참조).
     holiday_field_text = str(fields.get(HOLIDAY_FIELD) or "")
-    holiday_field_dates = set(extract_dates(holiday_field_text, base_year=base_year))
+    holiday_field_dates = set(extract_dates(holiday_field_text, base_year=date_year))
     holiday_rows = []   # (row_idx, parsed) — 진도표에서 휴강으로 처리한 행
 
     for row_idx, row in enumerate(raw.get("progress", []), start=1):
-        parsed, claimed_weekday, year_explicit = parse_date_detail(row.get("날짜"), base_year=base_year)
+        parsed, claimed_weekday, year_explicit = parse_date_detail(row.get("날짜"), base_year=date_year)
 
         # 내용은 있는데 날짜만 빈 행(셀 병합으로 값이 소거된 경우 등)은 회차에서
         # 빠져 수강료가 입력 의도와 달라진다 — 조용히 넘기지 않고 리포트로 드러낸다.
@@ -292,26 +377,11 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                     # 윤년 2/29가 보정 후 평년이 되는 경우: 이 행만 날짜 해석 실패로
                     # 처리하고(아래 DATE_PARSE_FAILED 경로) 강좌·배치는 계속 진행한다.
                     parsed = None
-        # 월별 모드: 이번 달 + 다음 달 행만 처리. 둘 다 아니면 제외.
-        # 날짜를 못 읽는 행은 달을 알 수 없어 제외하되 리포트에 남긴다(조용히 버리지 않음).
-        is_next = False
-        if slice_month is not None:
-            in_this = _in_target_month(parsed, base_year, slice_month)
-            is_next = _in_target_month(parsed, next_year, next_month)
-            if not (in_this or is_next):
-                if row.get("날짜") and not parsed:
-                    reports.append(
-                        _date_parse_failed_report(
-                            lecture, row_idx, row.get("날짜", ""), excluded_month=slice_month
-                        )
-                    )
-                continue
         row = dict(row)
         row["parsed_date"] = parsed.isoformat() if parsed else ""
         row["computed_weekday"] = weekday_kr(parsed) if parsed else ""
         row["weekday_mismatch_flag"] = False
         row["is_real_class"] = False
-        row["is_next_month"] = is_next   # 다음 달 미리보기 행(표시용 — 회차/수강료 누적 제외)
 
         if row.get("날짜") and not parsed:
             reports.append(_date_parse_failed_report(lecture, row_idx, row.get("날짜", "")))
@@ -332,9 +402,8 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                 )
             )
 
-        # 다음 달 행은 표시용 — 회차/수강료/기간 누적에는 절대 넣지 않는다(월 단가 메시지 유지).
         holiday = is_holiday_row(row)
-        if parsed and not holiday and not is_next:
+        if parsed and not holiday:
             row["is_real_class"] = True
             real_class_dates.append(parsed)
         if parsed and holiday:
@@ -342,7 +411,7 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
 
         # 휴강일 칸에 적힌 날짜가 진도표에서는 정상 수업으로 계산되는 경우 — 회차·수강료가
         # 입력 의도와 달라질 수 있다. 값은 고치지 않고(정책: 애매하면 리포트) 사람이 확인.
-        if parsed and not holiday and not is_next and parsed in holiday_field_dates:
+        if parsed and not holiday and parsed in holiday_field_dates:
             lecture["flags"].append("HOLIDAY_FIELD_CONFLICT")
             reports.append(
                 report_row(
@@ -410,28 +479,22 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
                     )
                 )
 
+    # 월별 모드: 대상 월 강좌가 아닌 정규반은 슬라이드를 만들지 않는다. 조용히 빼지 않고 제외 사실만
+    # 리포트한다(그 강좌의 다른 리포트는 이번 달 검수 대상이 아니라 싣지 않는다).
+    if filter_month is not None:
+        excluded = _target_month_exclusion(lecture, fields, real_class_dates, base_year, filter_month)
+        if excluded is not None:
+            return None, [excluded]
+        reports.extend(_target_month_ambiguity(lecture, fields, real_class_dates, filter_month))
+
     # 필수 입력값·빈 진도표 검사는 산출 형식(PPTX 생성 여부)과 무관하게 항상 수행한다
     # (이전에는 PPTX 단계에만 있어 --no-pptx 검증 실행에서 빠졌다).
     reports.extend(validate_required_values(lecture))
-
-    # 월별 모드: 그 달에 실제 수업이 0회인 정규반은 슬라이드를 만들지 않는다(빈 장 방지).
-    # 특강은 slice_month=None이라 이 조건을 타지 않고 전체 기간 그대로 유지된다.
-    if slice_month is not None and not real_class_dates:
-        return None, reports
 
     first_date = min(real_class_dates) if real_class_dates else None
     last_date = max(real_class_dates) if real_class_dates else None
     total_sessions = len(real_class_dates)
 
-    # 한 달 회차수 = 달력상 월별 회차 중 가장 많은 달(부분 월의 영향을 피하기 위해 최대값 사용).
-    # 월별 모드에서는 그 달만 남아 있어 자연히 그 달 회차수가 잡힌다.
-    month_counts = {}
-    for class_date in real_class_dates:
-        key = (class_date.year, class_date.month)
-        month_counts[key] = month_counts.get(key, 0) + 1
-    monthly_sessions = max(month_counts.values()) if month_counts else 0
-
-    # 청구 단위는 위에서 판별(classify_billing) — 정규반=monthly, 특강/썸머=total.
     class_time = fields.get("수업 요일 / 시간", "")
     time_info = extract_start_time(class_time)
     time_display = time_info["display"] if time_info else None
@@ -474,7 +537,6 @@ def normalize_lecture(raw, index, base_year, calendar_events=None, target_month=
         fields.get("강의형태", ""),
         total_sessions,
         teacher_name=fields.get("강사명", ""),
-        monthly_sessions=monthly_sessions,
         billing=billing,
         stable_id=stable_override_key(fields.get("강사명", ""), fields.get("강좌명", "")),
     )
@@ -572,6 +634,6 @@ def normalize_lectures(raw_lectures, base_year, academic_calendar_path=None, tar
             )
             continue
         reports.extend(lecture_reports)
-        if lecture is not None:   # 월별 모드: 그 달 0회 정규반만 None → 슬라이드 제외(특강은 항상 포함)
+        if lecture is not None:   # 월별 모드: 대상 월이 아닌 정규반만 None → 슬라이드 제외(특강은 항상 포함)
             normalized.append(lecture)
     return normalized, reports
