@@ -56,7 +56,7 @@ def run_template(tmp_path, texts, lecture=None, title_pt=None):
 
 def test_billing_undetermined_reported_when_no_basis():
     """# P3-2 회귀 방지
-    구분·시즌이 모두 비면 monthly로 조용히 가정된다(특강 표기 누락 = 오청구 위험).
+    구분·시즌이 모두 비면 정규반으로 보지 않아 월별 계획서에 항상 포함된다 — 조용히 가정하지 않는다.
     기대: BILLING_UNDETERMINED 리포트 존재 + billing 반환은 여전히 monthly
     (classify_billing 17개 테스트 계약 불변)."""
     lec, reports = normalize_lecture(make_lecture_raw(gubun="", season=""), 1, 2026)

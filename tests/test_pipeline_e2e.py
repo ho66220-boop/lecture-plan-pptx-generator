@@ -55,11 +55,11 @@ def test_normalized_snapshot(result):
     assert lecture["opening_date_display"] == "07. 07(화) 오후 6시 30분"
     assert lecture["computed_period"] == "7/7(화) ~ 8/11(화)"
 
-    # 홍길동은 강사별 회차당 예외(70,000원) + 정규반 월 단위 청구.
+    # 홍길동은 강사별 회차당 예외(70,000원). 정규반도 시트 전체 6회로 계산한다.
     assert lecture["billing"] == "monthly"
     assert lecture["fee_per_session"] == 70000
-    assert lecture["computed_fee"] == 280000
-    assert lecture["fee_display"] == "월 280,000원 (회차당 70,000원)"
+    assert lecture["computed_fee"] == 420000
+    assert lecture["fee_display"] == "420,000원 (회차당 70,000원)"
 
     # 예시에 심어둔 요일 불일치 플래그가 살아 있어야 한다.
     assert "WEEKDAY_MISMATCH" in lecture["flags"]

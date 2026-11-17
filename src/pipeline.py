@@ -44,7 +44,7 @@ def run_pipeline(
         teacher_photo_dir = str(default_photo_dir) if default_photo_dir.is_dir() else None
 
     raw_lectures, collect_reports = collect_lectures(input_path)
-    # target_month(예: 7)이 주어지면 정규반 월별 계획서 모드(그 달만 잘라 재계산).
+    # target_month(예: 7)이 주어지면 월별 계획서 모드(정규반은 그 달 강좌만 선별, 계산은 시트 전체).
     lectures, reports = normalize_lectures(
         raw_lectures, base_year, academic_calendar_path, target_month
     )
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-pptx", action="store_true")
     parser.add_argument(
         "--target-month", type=int, default=None,
-        help="정규반 월별 계획서: 대상 월(예: 7). 지정 시 정규반만, 그 달 진도로 회차·기간·수강료 재계산.",
+        help="정규반 월별 계획서: 대상 월(예: 7). 지정 시 정규반은 그 달 강좌(시즌 칸 월 표기 → 없으면 개강월)만 포함. 특강은 항상 포함.",
     )
     args = parser.parse_args()
     result = run_pipeline(

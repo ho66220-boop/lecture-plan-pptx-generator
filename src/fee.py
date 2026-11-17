@@ -61,14 +61,15 @@ def calculate_fee(
     lecture_format,
     total_sessions,
     teacher_name="",
-    monthly_sessions=None,
     billing="total",
     stable_id=None,
 ):
     """수강료 계산.
 
-    billing="monthly": 정규반 등 월 단위 청구. 한 달 회차수(monthly_sessions) 기준으로 산출.
-    billing="total":   특강/썸머 등 전체 회차 합계로 산출(강좌 전체 기간 일괄 수강).
+    수강료 = 회차당 단가 × 시트 전체 회차(total_sessions). 정규반도 특강도 같다 —
+    시트 1장이 한 번에 결제하는 강좌 1개(개강~종강)이기 때문. 이전에는 정규반을 달력 월
+    회차수로 계산해, 10/3~11/14처럼 다음 달에 끝나는 강좌의 수강료가 실제보다 적게 나왔다.
+    billing("monthly"=정규반, "total"=특강)은 강좌 종류 표식으로 그대로 돌려준다.
     총액 예외(FEE_OVERRIDES)는 안정 키(stable_id, '강사명|강좌명')를 먼저 보고,
     없으면 기존 lecture_id 키도 조회한다(하위 호환).
     """
@@ -103,15 +104,8 @@ def calculate_fee(
         }
 
     per_session = int(per_session)
-    if billing == "monthly" and monthly_sessions:
-        billed_sessions = int(monthly_sessions)
-        total = per_session * billed_sessions
-        fee_display = f"월 {total:,}원 (회차당 {per_session:,}원)"
-    else:
-        billing = "total"
-        billed_sessions = int(total_sessions)
-        total = per_session * billed_sessions
-        fee_display = f"{total:,}원 (회차당 {per_session:,}원)"
+    total = per_session * int(total_sessions)
+    fee_display = f"{total:,}원 (회차당 {per_session:,}원)"
 
     return {
         "fee_per_session": per_session,

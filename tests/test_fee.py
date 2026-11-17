@@ -52,28 +52,28 @@ def test_zero_sessions_returns_empty():
     assert fee["computed_fee"] is None
 
 
-def test_monthly_billing_uses_month_sessions():
-    """정규반(월 청구)은 한 달 회차수 기준. 총 8회·월 4회면 320,000원."""
-    fee = calculate_fee("L008", "현장강의", 8, monthly_sessions=4, billing="monthly")
+def test_regular_billing_uses_all_sessions_on_sheet():
+    """정규반도 시트 전체 회차로 계산한다(시트 1장 = 한 번에 결제하는 강좌 1개).
+    10/3~11/14처럼 다음 달에 끝나는 6회 강좌는 6회분 전부가 수강료다."""
+    fee = calculate_fee("L008", "현장강의", 6, billing="monthly")
     assert fee["fee_per_session"] == 80000
-    assert fee["computed_fee"] == 320000
-    assert fee["billing"] == "monthly"
-    assert fee["fee_display"].startswith("월 ")
+    assert fee["computed_fee"] == 480000
+    assert fee["billing"] == "monthly"                    # 강좌 종류 표식은 유지
+    assert fee["fee_display"] == "480,000원 (회차당 80,000원)"
 
 
 def test_special_billing_uses_total():
-    """특강/썸머(total 청구)는 전체 회차 합계."""
-    fee = calculate_fee("L009", "현장강의", 4, monthly_sessions=4, billing="total")
+    """특강/썸머도 전체 회차 합계(정규반과 같은 산식)."""
+    fee = calculate_fee("L009", "현장강의", 4, billing="total")
     assert fee["computed_fee"] == 320000
     assert fee["billing"] == "total"
-    assert not fee["fee_display"].startswith("월 ")
 
 
-def test_monthly_with_teacher_override():
-    """월 청구에도 강사 예외 단가가 적용된다(70,000 × 월 4회)."""
-    fee = calculate_fee("L010", "현장강의", 8, teacher_name="홍길동", monthly_sessions=4, billing="monthly")
+def test_regular_with_teacher_override():
+    """정규반에도 강사 예외 단가가 적용된다(70,000 × 5회)."""
+    fee = calculate_fee("L010", "현장강의", 5, teacher_name="홍길동", billing="monthly")
     assert fee["fee_per_session"] == 70000
-    assert fee["computed_fee"] == 280000
+    assert fee["computed_fee"] == 350000
 
 
 def test_stable_override_key_lookup(monkeypatch):
